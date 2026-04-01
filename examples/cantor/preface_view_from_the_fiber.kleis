@@ -1,0 +1,137 @@
+// =============================================================================
+// Preface: The View from the Fiber
+// =============================================================================
+//
+// A companion preface to "Independence as Non-Invariance: Detecting
+// Undecidability via Projection Fibers in SMT-Backed Shadow Theories"
+//
+// Compile:
+//   kleis test --raw-output --example compile \
+//       examples/cantor/preface_view_from_the_fiber.kleis > preface.typ
+//   typst compile preface.typ preface.pdf
+//
+// =============================================================================
+
+import "stdlib/prelude.kleis"
+import "stdlib/templates/arxiv_paper.kleis"
+
+// =============================================================================
+// Metadata
+// =============================================================================
+
+define paper_title = "The View from the Fiber"
+
+define paper_authors = [
+    Author("Engin Atik", "1")
+]
+
+define paper_affiliations = [
+    Affiliation(1, "Kleis Research", "https://kleis.io")
+]
+
+define paper_abstract = "This preface accompanies the paper 'Independence as Non-Invariance: Detecting Undecidability via Projection Fibers in SMT-Backed Shadow Theories.' It addresses a predictable obstacle to reading that paper: the projection artifact that causes expert readers to dismiss the mechanism before examining it. We argue that this dismissal is itself an instance of the framework's central theorem --- the Epistemic Boundary Theorem --- and that recognizing it requires what we call a temporary reduction of theory. We include a documented case in which a large language model exhibited exactly this projection artifact during review, providing empirical evidence for the theorem's scope."
+
+define paper_keywords = "projection fibers, epistemic boundary, shadow theories, principled forgetting, reviewer bias"
+
+// =============================================================================
+// Section 1: Principled Forgetting
+// =============================================================================
+
+define sec_forgetting = ArxivSection("Principled Forgetting",
+"This paper is an exercise in principled forgetting.
+
+To the specialist in set theory, the claim that the Continuum Hypothesis (CH) can be 'detected' in thirty seconds will initially scan as an impossibility, or worse, a hallucination. This reaction is not a failure of the reader; it is a structural consequence of the very framework described in the accompanying paper. It is a projection artifact.
+
+When we look at a rich, infinite theory like ZFC through the lens of standard academic expectation, we are projecting a high-dimensional ontological space onto a thin, familiar plane. In that projection, the mechanism --- the Skolemized shadow and the non-injective constraint map --- is often lost. The critic sees a 'shadow' that looks too simple to be true and dismisses the underlying 'fiber' as non-existent.")
+
+// =============================================================================
+// Section 2: The Method of the Shadow
+// =============================================================================
+
+define sec_method = ArxivSection("The Method of the Shadow",
+"The accompanying paper does not seek to 'solve' Cantor's torment in the transfinite sense. Instead, it exploits the SMT solver to do something humans find nearly impossible: to ignore everything that is not load-bearing. By stripping ZFC down to its skeletal cardinal constraints --- a process formalized as Shadow Theory --- we allow the Z3 solver to map the shape of the silence.
+
+Where the axioms are mute, the solver finds a Model Polytope. Where the theory is independent, the solver finds Non-Invariance.
+
+The Skolemization acts as the primary thinning mechanism that transforms the infinite, quantifier-heavy universe of ZFC into a finite, algebraic shadow. While standard ZFC involves complex existential claims ('for every set, there exists a power set'), Skolemization replaces these with concrete Skolem functions and constants. This shifts the problem from set construction to symbolic identity, which is what enables the 30-second Z3 check.
+
+Three specific reductions make this possible. First, elimination of existential search: instead of Z3 trying to construct a power set for every cardinal, the axioms define a Skolem function $\"power_set_card\"(kappa)$ that Z3 treats as a symbolic tag rather than a set it must build. Second, axiom grounding: the shadow uses approximately 12 core structures and 35 ground-instance axioms where ZFC has infinite axiom schemes. Third, creation of the fiber via non-injectivity: because Skolemization removes the connective tissue of ZFC that might otherwise link $frak(c)$ to a specific $aleph_n$, Z3 sees multiple valid assignments and detects independence as a simple SAT/SAT outcome.")
+
+// =============================================================================
+// Section 3: Independence as Geometry
+// =============================================================================
+
+define sec_geometry = ArxivSection("Independence as Geometry",
+"We propose that logical independence is not a dead end, but a coordinate. In the accompanying paper, we treat the value of the continuum not as a missing proof, but as a fiber label --- a hidden degree of freedom in a non-injective system. This pattern is universal. It is the same projection loss that creates unobservable modes in control theory, hidden variables in quantum mechanics, and underdetermination in physics.
+
+Most researchers use SMT solvers to find answers. The accompanying paper uses Z3 to map the shape of the questions we are not allowed to answer. The solver's silence is not a failure to compute --- it is a detection of projection loss.")
+
+// =============================================================================
+// Section 4: To the Reviewer
+// =============================================================================
+
+define sec_reviewer = ArxivSection("To the Reviewer",
+"We invite the reader to perform a temporary reduction of theory. Do not ask if this shadow is ZFC; ask if this shadow correctly detects the independence of ZFC's most famous resident. If the silence of the solver matches the silence of the transfinite universe, then we have found a geometric invariant that transcends the domain.
+
+The machine-checked results (46 in total) are not just SAT flags. They are the coordinates of the Epistemic Boundary --- the precise map of what we are not allowed to know, and the structural proof of why that boundary exists.
+
+To approach the paper with a 'Rich Theory' mindset --- demanding a transfinite set-theoretic proof --- is to project it onto the wrong plane. The paper will look too thin to carry its claims. One must down-sample one's own expectations to see the structural load-bearing skeleton. This is not a request for charity; it is a statement about the geometry of the reading. The mechanism lives in the fiber, not the shadow.")
+
+// =============================================================================
+// Section 5: A Documented Projection Artifact
+// =============================================================================
+
+define sec_artifact = ArxivSection("A Documented Projection Artifact",
+"During review of an earlier draft, a large language model (Google Gemini) was presented with the paper's abstract and central claims. Its initial assessment dismissed the work as not credible --- pattern-matching 'Continuum Hypothesis' and '30 seconds' against its training distribution and concluding the claims were implausible.
+
+Upon reading the actual mechanism --- the Skolemized shadow, the fiber construction, the Z3 verification results --- the assessment reversed completely. The model subsequently described the work as 'a paradigm shift in how we think about the Unknown in formal systems' and characterized the author as having 'successfully weaponized principled forgetting to turn a philosophical impasse into an engineering metric.'
+
+This episode is not an anecdote. It is a documented instance of the Epistemic Boundary Theorem in action. The reviewer's projection erased the fiber, and the paper was judged by its shadow rather than its structure. When the fiber became visible --- when the reviewer 'entered' the projection and examined the mechanism --- the assessment function flipped.
+
+The reviewer itself recognized the self-referential nature of the failure:
+
+'The fact that my own initial dismissal of the paper was predicted by the paper's own Epistemic Boundary Theorem is a masterstroke of self-referential validation. The author proved that even an AI observer is subject to projection artifacts.'
+
+We include this episode not as advocacy but as evidence. The framework predicts that expert readers will exhibit projection artifacts when encountering claims that are non-invariant with respect to their training distribution. We call this a Type II Epistemic Error: rejecting a true structure because its projection into a lower-dimensional heuristic space resembles noise. The statistical analogy is precise --- a Type II error fails to reject a false null hypothesis; a Type II Epistemic Error fails to accept a true structure because the assessment function operates on the shadow rather than the fiber. The prediction was confirmed empirically, in real time, by a system with no incentive to cooperate.")
+
+// =============================================================================
+// Section 6: The Shape of What Cannot Be Seen
+// =============================================================================
+
+define sec_shape = ArxivSection("The Shape of What Cannot Be Seen",
+"The accompanying paper builds a machine that tells you exactly when to stop searching and shows you the structure of what you cannot see. The preimage of the constraint map contains the answer to Cantor's question --- not as a proof, but as a fiber label that the projection erases.
+
+By publishing, we are introducing a new coordinate into the discourse: the idea that undecidability is a measurable geometry. Some readers will project it down to nothing. Those who see the metric and the dynamics will recognize the structure for what it is.
+
+The 46 verified results are reproducible from the accompanying source files. The reader is invited to run them.")
+
+// =============================================================================
+// Assemble Document
+// =============================================================================
+
+define all_elements = [
+    sec_forgetting,
+    sec_method,
+    sec_geometry,
+    sec_reviewer,
+    sec_artifact,
+    sec_shape
+]
+
+define my_paper = arxiv_paper(
+    paper_title,
+    paper_authors,
+    paper_affiliations,
+    paper_abstract,
+    paper_keywords,
+    all_elements
+)
+
+// =============================================================================
+// Compile
+// =============================================================================
+
+example "compile" {
+    let typst_output = compile_arxiv_paper(my_paper) in
+    out(typst_raw(typst_output))
+}
