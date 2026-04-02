@@ -1,7 +1,7 @@
 # ADR-033: Musical Score Notation via LilyPond
 
-**Status:** Phase 1 Complete, Phase 1.5 Planned  
-**Date:** 2026-03-14 (updated 2026-03-22)  
+**Status:** Phase 1 Complete, Phase 2a (Music Theory Extensions) In Progress  
+**Date:** 2026-03-14 (updated 2026-04-01)  
 **Related:** ADR-012 (Document Authoring), ADR-023 (Kleist Template Externalization), ADR-018 (Universal Formalism)
 
 ---
@@ -380,12 +380,46 @@ axiom checkers has been verified against the Moonlight Sonata AST:
 The violations are diagnostically useful — they identify exactly where
 and why a strict rule fails, guiding construction of richer theories.
 
-**Planned refinements:**
+**Completed refinements (Phase 2a):**
 
 - Harmonic skeleton vs. surface distinction (non-chord tone classification)
+  in `stdlib/theories/harmonic_reduction.kleis`
+- Metric position and beat awareness in `stdlib/theories/metric_analysis.kleis`
+- Extended articulations (downbow, upbow, trill, turn, mordent, breath,
+  portato, staccatissimo) in `stdlib/templates/sheet_music.kleis`
+- Parameterized harmonic rhythm in `stdlib/theories/tonal_harmony.kleis`
+- Skeleton-level re-checks on Moonlight Sonata in `examples/music/moonlight_analysis.kleis`
+
+**Key results from skeleton analysis:**
+- Surface Axiom 3 violation at m4 → due to non-chord tones (SAT at skeleton)
+- Surface Axiom 7 violations: 8 → 4 with cut-time parameterization
+- Parallel fifths at m13: metric weight 4 (serious, on downbeat)
+
+**Planned refinements (future):**
+
 - Full SMT-backed `forall`-quantified constraints (currently concrete evaluation)
-- Comparative analysis across composers (Bach, Chopin, Beethoven)
+- Comparative analysis across composers (Bach, Chopin, Beethoven, Debussy)
 - Richer counterpoint theory (species counterpoint, four-voice rules)
+
+**Harmonic theory extensions (Phase 2b candidates):**
+
+- Cadence classification: perfect/imperfect authentic, half, deceptive, plagal
+- Secondary function detection: secondary dominants (V/V, V/vi), secondary
+  leading-tone chords (viio/V), extended secondary chains
+- Chromatic harmony: Neapolitan sixth (bII6), augmented sixth chords (Italian,
+  French, German), borrowed chords (modal mixture), Picardy third
+- Tritone substitution detection (jazz/late-Romantic harmony)
+- Modulation tracking: common-chord pivot, chromatic, enharmonic, direct
+- Voice leading rules: tendency tone resolution (leading tone up, 7th down),
+  suspension classification (4-3, 7-6, 9-8) with resolution checks
+- Harmonic progression validation: circle-of-fifths motion,
+  predominant → dominant → tonic functional flow
+- Extended harmony: ninth/eleventh/thirteenth chords, altered dominants,
+  quartal/quintal harmony, planing
+- Schenkerian reduction: multi-level skeleton analysis (foreground,
+  middleground, background structural lines)
+- Key area mapping: tracking modulations across a piece to produce a
+  tonal plan diagram
 
 ---
 
@@ -396,7 +430,9 @@ stdlib/templates/
   sheet_music.kleis          # Template: types + LilyPond compiler
 
 stdlib/theories/
-  tonal_harmony.kleis        # TonalHarmony theory: 7 axiom checkers
+  tonal_harmony.kleis        # TonalHarmony theory: 7 axiom checkers + parameterized rhythm
+  harmonic_reduction.kleis   # Skeleton vs. surface: note classification, reduction
+  metric_analysis.kleis      # Beat position, metric weight, weighted parallel checks
 
 examples/music/
   ode_to_joy.kleis           # Demo: Beethoven Ode to Joy

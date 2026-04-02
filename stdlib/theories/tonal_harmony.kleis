@@ -303,6 +303,71 @@ define pcs_equal(a, b) =
     else false
 
 // =============================================================================
+// Axiom 7b: Parameterized Harmonic Rhythm
+// =============================================================================
+// Instead of requiring uniform harmony across the whole measure,
+// allow a configurable number of harmony changes per measure.
+//
+// changes_per_measure = 1: one harmony per bar (same as original)
+// changes_per_measure = 2: one change per half-bar (appropriate for cut time)
+// changes_per_measure = 4: one change per beat in 4/4
+//
+// Groups are split into segments of (total_groups / changes_per_measure),
+// and each segment must have uniform harmony within it.
+
+define check_harmonic_rhythm_param(accomp_measures, changes_per_measure) =
+    hrp_acc(accomp_measures, 0, changes_per_measure, Nil)
+
+define hrp_acc(measures, idx, cpm, violations) =
+    if eq(length(measures), 0) then violations
+    else
+        let groups = get_groups(head(measures)) in
+        if uniform_within_segments(groups, cpm) then
+            hrp_acc(tail(measures), idx + 1, cpm, violations)
+        else
+            hrp_acc(tail(measures), idx + 1, cpm, append(violations, Cons(idx, Nil)))
+
+// Check that harmony is uniform within each segment
+define uniform_within_segments(groups, cpm) =
+    let total = length(groups) in
+    let seg_size = if total >= cpm then total / cpm else 1 in
+    uws_acc(groups, seg_size, 0, total)
+
+define uws_acc(groups, seg_size, pos, total) =
+    if pos >= total then true
+    else
+        let seg = take_n(groups, seg_size) in
+        if uniform_harmony(seg) then
+            uws_acc(drop_n(groups, seg_size), seg_size, pos + seg_size, total)
+        else false
+
+// List utilities for segment extraction
+define take_n(lst, n) =
+    if eq(n, 0) then Nil
+    else if eq(length(lst), 0) then Nil
+    else Cons(head(lst), take_n(tail(lst), n - 1))
+
+define drop_n(lst, n) =
+    if eq(n, 0) then lst
+    else if eq(length(lst), 0) then Nil
+    else drop_n(tail(lst), n - 1)
+
+// Count the number of distinct harmonies in a measure
+define count_harmony_changes(m) =
+    chc_acc(get_groups(m), Nil, 0)
+
+define chc_acc(groups, prev_pcs, count) =
+    if eq(length(groups), 0) then count
+    else
+        let curr_pcs = group_pcs(head(groups)) in
+        if eq(length(prev_pcs), 0) then
+            chc_acc(tail(groups), curr_pcs, 1)
+        else if pcs_equal(prev_pcs, curr_pcs) then
+            chc_acc(tail(groups), curr_pcs, count)
+        else
+            chc_acc(tail(groups), curr_pcs, count + 1)
+
+// =============================================================================
 // Self-Tests — verify the theory functions
 // =============================================================================
 

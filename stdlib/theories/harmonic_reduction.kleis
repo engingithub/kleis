@@ -1,0 +1,401 @@
+// =============================================================================
+// Harmonic Reduction Theory — Skeleton vs. Surface Analysis
+// =============================================================================
+//
+// Distinguishes two layers of tonal harmony:
+//
+//   Harmonic skeleton: the governing chord at each time span
+//   Harmonic surface:  actual sounding notes including ornamental tones
+//
+// A note is classified as either a ChordTone (part of the skeleton) or
+// one of several ornament types (passing tone, neighbor tone, suspension,
+// appoggiatura, anticipation, escape tone, pedal).
+//
+// Classification rules follow standard music theory:
+//   - ChordTone:    pitch class is in the governing chord
+//   - PassingTone:  non-chord, stepwise between two chord tones
+//   - NeighborTone: non-chord, steps away from and returns to a chord tone
+//   - Suspension:   non-chord, held from previous chord tone, resolves down
+//   - Appoggiatura: non-chord, approached by leap, resolves by step
+//   - Anticipation: non-chord, anticipates the next chord tone
+//   - EscapeTone:   non-chord, approached by step, leaves by leap
+//   - Pedal:        sustained bass tone through changing harmonies
+//
+// See: ADR-033 (Musical Score Notation)
+// =============================================================================
+
+import "stdlib/templates/sheet_music.kleis"
+import "stdlib/theories/tonal_harmony.kleis"
+
+// =============================================================================
+// Note Function Classification
+// =============================================================================
+
+data NoteFunction = ChordTone
+                  | PassingTone
+                  | NeighborTone
+                  | Suspension
+                  | Appoggiatura
+                  | Anticipation
+                  | EscapeTone
+                  | Pedal
+                  | Unclassified
+
+// =============================================================================
+// Harmonic Labels and Analyzed Structures
+// =============================================================================
+
+// A governing harmony: pitch class set + optional root
+data HarmonicLabel = HarmonicLabel(List, ℤ)
+
+// A note with its functional classification
+data AnalyzedNote = AnalyzedNote(Pitch, NoteFunction)
+
+// A measure with its governing harmony and classified notes
+data AnalyzedMeasure = AnalyzedMeasure(HarmonicLabel, List)
+
+// =============================================================================
+// Interval Helpers
+// =============================================================================
+
+// A step is an interval of 1 or 2 semitones
+define is_step(p1, p2) =
+    let dist = interval_abs(p1, p2) in
+    if eq(dist, 1) then true
+    else eq(dist, 2)
+
+// A leap is an interval of 3+ semitones
+define is_leap(p1, p2) =
+    interval_abs(p1, p2) >= 3
+
+// Check if a pitch class belongs to a chord's pitch class set
+define is_chord_member(p, chord_pcs) =
+    pc_member(pitch_class(p), chord_pcs)
+
+// =============================================================================
+// Note Classification
+// =============================================================================
+
+// Classify a single note given its melodic context and the governing chord.
+//   pitch:     the note to classify
+//   prev:      the preceding pitch (or no_pitch if first note)
+//   next_p:    the following pitch (or no_pitch if last note)
+//   chord_pcs: pitch class set of the governing harmony
+define classify_note(pitch, prev, next_p, chord_pcs) =
+    if is_chord_member(pitch, chord_pcs) then ChordTone
+    else if is_no_pitch(prev) then
+        if is_no_pitch(next_p) then Unclassified
+        else if is_step(pitch, next_p) then
+            if is_chord_member(next_p, chord_pcs) then Appoggiatura
+            else Unclassified
+        else Unclassified
+    else if is_no_pitch(next_p) then
+        if is_step(prev, pitch) then
+            if is_chord_member(prev, chord_pcs) then EscapeTone
+            else Unclassified
+        else Unclassified
+    else
+        let step_from_prev = is_step(prev, pitch) in
+        let step_to_next = is_step(pitch, next_p) in
+        let prev_chord = is_chord_member(prev, chord_pcs) in
+        let next_chord = is_chord_member(next_p, chord_pcs) in
+        if step_from_prev then
+            if step_to_next then
+                if prev_chord then
+                    if next_chord then
+                        if eq(pitch_to_midi(prev), pitch_to_midi(next_p))
+                            then NeighborTone
+                        else PassingTone
+                    else PassingTone
+                else if next_chord then PassingTone
+                else Unclassified
+            else
+                if prev_chord then EscapeTone
+                else Unclassified
+        else
+            if step_to_next then
+                if next_chord then Appoggiatura
+                else Unclassified
+            else Unclassified
+
+// =============================================================================
+// Note Function Display
+// =============================================================================
+
+define note_function_name(nf) = match nf {
+    ChordTone    => "chord"
+  | PassingTone  => "passing"
+  | NeighborTone => "neighbor"
+  | Suspension   => "suspension"
+  | Appoggiatura => "appoggiatura"
+  | Anticipation => "anticipation"
+  | EscapeTone   => "escape"
+  | Pedal        => "pedal"
+  | Unclassified => "unclassified"
+}
+
+define is_ornamental(nf) = match nf {
+    ChordTone    => false
+  | PassingTone  => true
+  | NeighborTone => true
+  | Suspension   => true
+  | Appoggiatura => true
+  | Anticipation => true
+  | EscapeTone   => true
+  | Pedal        => true
+  | Unclassified => true
+}
+
+// =============================================================================
+// Pitch Extraction from Event Lists
+// =============================================================================
+
+// Extract all pitches from a measure's events as a flat list
+define extract_pitches(m) = match m {
+    Measure(events) => ep_events(events)
+}
+
+define ep_events(evs) =
+    if eq(length(evs), 0) then Nil
+    else append(ep_event(head(evs)), ep_events(tail(evs)))
+
+define ep_event(e) = match e {
+    Note(p, d)        => Cons(p, Nil)
+  | Chord(ps, d)      => ps
+  | Marked(inner, a)  => ep_event(inner)
+  | Tuplet(n, d, evs) => ep_events(evs)
+  | Rest(d)           => Nil
+  | Spacer(d)         => Nil
+  | Tempo(t)          => Nil
+}
+
+// =============================================================================
+// Measure Reduction
+// =============================================================================
+
+// Analyze all pitches in a measure against a governing harmony.
+// Returns AnalyzedMeasure with each note classified.
+define reduce_measure(m, chord_pcs, root_pc) =
+    let pitches = extract_pitches(m) in
+    let label = HarmonicLabel(chord_pcs, root_pc) in
+    let analyzed = classify_pitch_list(pitches, chord_pcs) in
+    AnalyzedMeasure(label, analyzed)
+
+// Classify a list of pitches in context
+define classify_pitch_list(pitches, chord_pcs) =
+    cpl_acc(pitches, chord_pcs, no_pitch, Nil)
+
+define cpl_acc(remaining, chord_pcs, prev, acc) =
+    if eq(length(remaining), 0) then acc
+    else
+        let curr = head(remaining) in
+        let next_p = if eq(length(tail(remaining)), 0) then no_pitch
+                     else head(tail(remaining)) in
+        let func = classify_note(curr, prev, next_p, chord_pcs) in
+        let analyzed = AnalyzedNote(curr, func) in
+        cpl_acc(tail(remaining), chord_pcs, curr, append(acc, Cons(analyzed, Nil)))
+
+// =============================================================================
+// Skeleton and Surface Extraction
+// =============================================================================
+
+// Extract only chord tones from an analyzed measure
+define extract_skeleton(am) = match am {
+    AnalyzedMeasure(label, notes) => filter_chord_tones(notes)
+}
+
+// Extract only ornamental notes from an analyzed measure
+define extract_ornaments(am) = match am {
+    AnalyzedMeasure(label, notes) => filter_ornament_notes(notes)
+}
+
+define filter_chord_tones(notes) =
+    if eq(length(notes), 0) then Nil
+    else
+        match head(notes) {
+            AnalyzedNote(p, func) =>
+                if is_ornamental(func) then filter_chord_tones(tail(notes))
+                else Cons(head(notes), filter_chord_tones(tail(notes)))
+        }
+
+define filter_ornament_notes(notes) =
+    if eq(length(notes), 0) then Nil
+    else
+        match head(notes) {
+            AnalyzedNote(p, func) =>
+                if is_ornamental(func)
+                    then Cons(head(notes), filter_ornament_notes(tail(notes)))
+                else filter_ornament_notes(tail(notes))
+        }
+
+// Count chord tones vs ornaments
+define count_chord_tones(am) = match am {
+    AnalyzedMeasure(label, notes) => count_structural(notes)
+}
+
+define count_ornaments(am) = match am {
+    AnalyzedMeasure(label, notes) => count_ornamental(notes)
+}
+
+define count_structural(notes) =
+    if eq(length(notes), 0) then 0
+    else
+        match head(notes) {
+            AnalyzedNote(p, func) =>
+                if is_ornamental(func) then count_structural(tail(notes))
+                else 1 + count_structural(tail(notes))
+        }
+
+define count_ornamental(notes) =
+    if eq(length(notes), 0) then 0
+    else
+        match head(notes) {
+            AnalyzedNote(p, func) =>
+                if is_ornamental(func) then 1 + count_ornamental(tail(notes))
+                else count_ornamental(tail(notes))
+        }
+
+// =============================================================================
+// Skeleton Pitch Classes
+// =============================================================================
+
+// Extract pitch classes from skeleton notes only
+define skeleton_pcs(am) =
+    let skel = extract_skeleton(am) in
+    analyzed_to_pcs(skel)
+
+define analyzed_to_pcs(notes) =
+    if eq(length(notes), 0) then Nil
+    else
+        match head(notes) {
+            AnalyzedNote(p, func) =>
+                Cons(pitch_class(p), analyzed_to_pcs(tail(notes)))
+        }
+
+// Check if the governing harmony is a recognized triad.
+// Since skeleton notes are by definition chord members, the skeleton
+// forms a triad iff the governing chord is a triad and has notes.
+define skeleton_is_triad(am) = match am {
+    AnalyzedMeasure(label, notes) =>
+        if eq(length(notes), 0) then false
+        else match label {
+            HarmonicLabel(chord_pcs, root) =>
+                if eq(length(chord_pcs), 3) then
+                    is_recognized_triad(head(chord_pcs), list_get(chord_pcs, 1), list_get(chord_pcs, 2))
+                else if length(chord_pcs) < 3 then true
+                else false
+        }
+}
+
+// Remove duplicate pitch classes
+define unique_pcs(pcs) = unique_acc(pcs, Nil)
+
+define unique_acc(pcs, seen) =
+    if eq(length(pcs), 0) then seen
+    else
+        let pc = head(pcs) in
+        if pc_member(pc, seen) then unique_acc(tail(pcs), seen)
+        else unique_acc(tail(pcs), append(seen, Cons(pc, Nil)))
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+example "classify chord tone" {
+    let chord = Cons(0, Cons(4, Cons(7, Nil))) in
+    let p = P(C, Natural, 4) in
+    assert(classify_note(p, no_pitch, no_pitch, chord) = ChordTone)
+}
+
+example "classify passing tone" {
+    let chord = Cons(0, Cons(4, Cons(7, Nil))) in
+    let prev = P(C, Natural, 4) in
+    let curr = P(D, Natural, 4) in
+    let next_p = P(E, Natural, 4) in
+    assert(classify_note(curr, prev, next_p, chord) = PassingTone)
+}
+
+example "classify neighbor tone" {
+    let chord = Cons(0, Cons(4, Cons(7, Nil))) in
+    let prev = P(C, Natural, 4) in
+    let curr = P(D, Natural, 4) in
+    let next_p = P(C, Natural, 4) in
+    assert(classify_note(curr, prev, next_p, chord) = NeighborTone)
+}
+
+example "classify appoggiatura" {
+    let chord = Cons(0, Cons(4, Cons(7, Nil))) in
+    let prev = P(A, Natural, 3) in
+    let curr = P(D, Natural, 4) in
+    let next_p = P(C, Natural, 4) in
+    assert(classify_note(curr, prev, next_p, chord) = Appoggiatura)
+}
+
+example "classify escape tone" {
+    let chord = Cons(0, Cons(4, Cons(7, Nil))) in
+    let prev = P(C, Natural, 4) in
+    let curr = P(D, Natural, 4) in
+    let next_p = P(A, Natural, 4) in
+    assert(classify_note(curr, prev, next_p, chord) = EscapeTone)
+}
+
+example "note function names" {
+    assert(note_function_name(ChordTone) = "chord")
+    assert(note_function_name(PassingTone) = "passing")
+    assert(note_function_name(NeighborTone) = "neighbor")
+}
+
+example "is_ornamental" {
+    assert(is_ornamental(ChordTone) = false)
+    assert(is_ornamental(PassingTone) = true)
+    assert(is_ornamental(NeighborTone) = true)
+    assert(is_ornamental(Appoggiatura) = true)
+}
+
+example "reduce C major measure" {
+    let chord = Cons(0, Cons(4, Cons(7, Nil))) in
+    let m = Measure(Cons(Note(P(C, Natural, 4), Quarter),
+            Cons(Note(P(D, Natural, 4), Quarter),
+            Cons(Note(P(E, Natural, 4), Quarter),
+            Cons(Note(P(C, Natural, 4), Quarter), Nil))))) in
+    let am = reduce_measure(m, chord, 0) in
+    assert(count_chord_tones(am) = 3)
+    assert(count_ornaments(am) = 1)
+}
+
+example "extract skeleton" {
+    let chord = Cons(0, Cons(4, Cons(7, Nil))) in
+    let m = Measure(Cons(Note(P(C, Natural, 4), Quarter),
+            Cons(Note(P(D, Natural, 4), Quarter),
+            Cons(Note(P(E, Natural, 4), Quarter),
+            Cons(Note(P(C, Natural, 4), Quarter), Nil))))) in
+    let am = reduce_measure(m, chord, 0) in
+    let skel = extract_skeleton(am) in
+    assert(length(skel) = 3)
+    let orn = extract_ornaments(am) in
+    assert(length(orn) = 1)
+}
+
+example "skeleton triad check" {
+    let chord = Cons(0, Cons(4, Cons(7, Nil))) in
+    let m = Measure(Cons(Note(P(C, Natural, 4), Quarter),
+            Cons(Note(P(D, Natural, 4), Quarter),
+            Cons(Note(P(E, Natural, 4), Quarter),
+            Cons(Note(P(G, Natural, 4), Quarter), Nil))))) in
+    let am = reduce_measure(m, chord, 0) in
+    assert(skeleton_is_triad(am) = true)
+}
+
+example "unique pitch classes" {
+    let pcs = Cons(0, Cons(4, Cons(7, Cons(0, Cons(4, Nil))))) in
+    let u = unique_pcs(pcs) in
+    assert(length(u) = 3)
+}
+
+example "is_step and is_leap" {
+    assert(is_step(P(C, Natural, 4), P(D, Natural, 4)) = true)
+    assert(is_step(P(C, Natural, 4), P(C, Sharp, 4)) = true)
+    assert(is_step(P(C, Natural, 4), P(E, Natural, 4)) = false)
+    assert(is_leap(P(C, Natural, 4), P(E, Natural, 4)) = true)
+    assert(is_leap(P(C, Natural, 4), P(D, Natural, 4)) = false)
+}

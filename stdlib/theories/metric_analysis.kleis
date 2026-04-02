@@ -1,0 +1,196 @@
+// =============================================================================
+// Metric Analysis Theory — Beat Position and Metric Weight
+// =============================================================================
+//
+// Provides metric position classification and weighted analysis for
+// musical events within measures. Enables contextual evaluation of
+// voice-leading violations based on metric strength.
+//
+// Metric hierarchy (4/4 example):
+//   Beat 1: Downbeat (weight 4)
+//   Beat 2: Weak beat (weight 2)
+//   Beat 3: Secondary strong (weight 3)
+//   Beat 4: Weak beat (weight 2)
+//   Off-beats: weight 1
+//
+// See: ADR-033 (Musical Score Notation)
+// =============================================================================
+
+import "stdlib/templates/sheet_music.kleis"
+import "stdlib/theories/tonal_harmony.kleis"
+
+// =============================================================================
+// Metric Position Types
+// =============================================================================
+
+data MetricPosition = Downbeat | SecondaryStrong | WeakBeat | OffBeat
+
+// =============================================================================
+// Beat Position Classification
+// =============================================================================
+
+// Metric weight: higher = stronger beat position
+define metric_weight(pos) = match pos {
+    Downbeat        => 4
+  | SecondaryStrong => 3
+  | WeakBeat        => 2
+  | OffBeat         => 1
+}
+
+// Classify beat position within a measure.
+// beat_index: 0-based position in sixteenth-note grid
+// time_sig: TimeSig(beats_per_bar, beat_unit)
+//
+// In 4/4: beat_unit_sixteenths = 4, so beats fall at 0, 4, 8, 12
+//   index 0  -> Downbeat
+//   index 8  -> SecondaryStrong (beat 3 in 4/4)
+//   index 4, 12 -> WeakBeat (beats 2, 4)
+//   anything else -> OffBeat
+//
+// In 3/4: beats at 0, 4, 8
+//   index 0 -> Downbeat
+//   index 4, 8 -> WeakBeat
+//
+// In 2/2: beat_unit_sixteenths = 8, beats at 0, 8
+//   index 0 -> Downbeat
+//   index 8 -> WeakBeat
+
+define beat_position(beat_index, ts) = match ts {
+    TimeSig(num, den) =>
+        let unit = 16 / den in
+        if eq(mod_int(beat_index, unit), 0) then
+            let beat_num = beat_index / unit in
+            if eq(beat_num, 0) then Downbeat
+            else if eq(num, 4) then
+                if eq(beat_num, 2) then SecondaryStrong
+                else WeakBeat
+            else if eq(num, 6) then
+                if eq(beat_num, 3) then SecondaryStrong
+                else WeakBeat
+            else WeakBeat
+        else OffBeat
+}
+
+// =============================================================================
+// Event-Level Metric Classification
+// =============================================================================
+
+// Compute metric positions for all events in a measure.
+// Returns a list of MetricPosition values, one per event.
+define classify_measure_beats(m, ts) = match m {
+    Measure(events) => classify_events_beats(events, 0, ts)
+}
+
+define classify_events_beats(events, offset, ts) =
+    if eq(length(events), 0) then Nil
+    else
+        let pos = beat_position(offset, ts) in
+        let dur = event_duration(head(events)) in
+        Cons(pos, classify_events_beats(tail(events), offset + dur, ts))
+
+// =============================================================================
+// Weighted Parallel Motion Detection
+// =============================================================================
+
+// Check parallel motion between two voice lines, returning the metric
+// weight of the strongest violation. Returns 0 if no parallels found.
+// target_ic: interval class to check (0 = octaves, 7 = fifths)
+define weighted_parallel_check(mel_measures, bass_measures, target_ic, ts) =
+    wpc_acc(mel_measures, bass_measures, no_pitch, no_pitch, 0, target_ic, ts, 0)
+
+define wpc_acc(mels, basses, prev_mel, prev_bass, idx, target_ic, ts, max_w) =
+    if eq(length(mels), 0) then max_w
+    else
+        let mel_p = first_pitch(head(mels)) in
+        let bass_p = first_pitch(head(basses)) in
+        if is_no_pitch(mel_p) then
+            wpc_acc(tail(mels), tail(basses), mel_p, bass_p, idx + 1, target_ic, ts, max_w)
+        else if is_no_pitch(prev_mel) then
+            wpc_acc(tail(mels), tail(basses), mel_p, bass_p, idx + 1, target_ic, ts, max_w)
+        else
+            let ic_prev = interval_class(prev_mel, prev_bass) in
+            let ic_curr = interval_class(mel_p, bass_p) in
+            if eq(ic_prev, target_ic) then
+                if eq(ic_curr, target_ic) then
+                    let pos = beat_position(0, ts) in
+                    let w = metric_weight(pos) in
+                    let new_max = if w > max_w then w else max_w in
+                    wpc_acc(tail(mels), tail(basses), mel_p, bass_p, idx + 1, target_ic, ts, new_max)
+                else wpc_acc(tail(mels), tail(basses), mel_p, bass_p, idx + 1, target_ic, ts, max_w)
+            else wpc_acc(tail(mels), tail(basses), mel_p, bass_p, idx + 1, target_ic, ts, max_w)
+
+// Severity classification based on metric weight of violation
+define parallel_severity(weight) =
+    if weight >= 4 then "serious"
+    else if weight >= 3 then "moderate"
+    else if weight >= 2 then "mild"
+    else if weight >= 1 then "tolerable"
+    else "none"
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+example "downbeat in 4/4" {
+    let ts = TimeSig(4, 4) in
+    assert(beat_position(0, ts) = Downbeat)
+}
+
+example "secondary strong in 4/4" {
+    let ts = TimeSig(4, 4) in
+    assert(beat_position(8, ts) = SecondaryStrong)
+}
+
+example "weak beats in 4/4" {
+    let ts = TimeSig(4, 4) in
+    assert(beat_position(4, ts) = WeakBeat)
+    assert(beat_position(12, ts) = WeakBeat)
+}
+
+example "off-beat in 4/4" {
+    let ts = TimeSig(4, 4) in
+    assert(beat_position(2, ts) = OffBeat)
+    assert(beat_position(6, ts) = OffBeat)
+}
+
+example "downbeat in 3/4" {
+    let ts = TimeSig(3, 4) in
+    assert(beat_position(0, ts) = Downbeat)
+    assert(beat_position(4, ts) = WeakBeat)
+    assert(beat_position(8, ts) = WeakBeat)
+}
+
+example "cut time 2/2" {
+    let ts = TimeSig(2, 2) in
+    assert(beat_position(0, ts) = Downbeat)
+    assert(beat_position(8, ts) = WeakBeat)
+    assert(beat_position(4, ts) = OffBeat)
+}
+
+example "metric weights" {
+    assert(metric_weight(Downbeat) = 4)
+    assert(metric_weight(SecondaryStrong) = 3)
+    assert(metric_weight(WeakBeat) = 2)
+    assert(metric_weight(OffBeat) = 1)
+}
+
+example "classify measure beats 4/4" {
+    let ts = TimeSig(4, 4) in
+    let m = Measure(Cons(Note(P(C, Natural, 4), Quarter),
+            Cons(Note(P(D, Natural, 4), Quarter),
+            Cons(Note(P(E, Natural, 4), Quarter),
+            Cons(Note(P(F, Natural, 4), Quarter), Nil))))) in
+    let positions = classify_measure_beats(m, ts) in
+    assert(head(positions) = Downbeat)
+    assert(list_get(positions, 1) = WeakBeat)
+    assert(list_get(positions, 2) = SecondaryStrong)
+    assert(list_get(positions, 3) = WeakBeat)
+}
+
+example "parallel severity" {
+    assert(parallel_severity(4) = "serious")
+    assert(parallel_severity(3) = "moderate")
+    assert(parallel_severity(2) = "mild")
+    assert(parallel_severity(1) = "tolerable")
+    assert(parallel_severity(0) = "none")
+}

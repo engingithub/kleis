@@ -18,6 +18,8 @@
 
 import "moonlight_sonata.kleis"
 import "stdlib/theories/tonal_harmony.kleis"
+import "stdlib/theories/harmonic_reduction.kleis"
+import "stdlib/theories/metric_analysis.kleis"
 
 // =============================================================================
 // Axiom 1: Tonic Opening
@@ -131,4 +133,121 @@ example "melody m5 first pitch" {
     out("Melody m5 first sounding pitch MIDI:")
     out(pitch_to_midi(p))
     assert(pitch_class(p) = 8)
+}
+
+// =============================================================================
+// Skeleton vs. Surface Analysis
+// =============================================================================
+// Re-run axiom checks at the skeleton level using harmonic reduction.
+// Governing chord PCs per measure (from score comments):
+//   m1-2: C# minor = {1, 4, 8}   (G#, C#, E)
+//   m3:   A major first half {9, 1, 4}, D area second half {9, 2, 6}
+//   m4:   mixed (G#7, C#m, C#m add4, F#/B#)
+//   m5:   C# minor = {1, 4, 8}
+
+define csm_pcs = Cons(1, Cons(4, Cons(8, Nil)))
+
+example "skeleton: m1 reduction" {
+    let am = reduce_measure(acc1, csm_pcs, 1) in
+    out("m1 chord tones:")
+    out(count_chord_tones(am))
+    out("m1 ornaments:")
+    out(count_ornaments(am))
+}
+
+example "skeleton: m1 triad" {
+    let am = reduce_measure(acc1, csm_pcs, 1) in
+    out("m1 skeleton is triad:")
+    out(skeleton_is_triad(am))
+    assert(skeleton_is_triad(am) = true)
+}
+
+// m4 was the first surface-level triad violation (Axiom 3).
+// The measure contains G#7, C#m, C#m/D#, and F#/B# — four different
+// harmonies. At the surface, not every triplet is a simple triad.
+// With harmonic reduction using the dominant G# harmony:
+define gsharp7_pcs = Cons(8, Cons(0, Cons(3, Cons(6, Nil))))
+
+example "skeleton: m4 reduction (G#7 reference)" {
+    let am = reduce_measure(acc4, gsharp7_pcs, 8) in
+    out("m4 chord tones (against G#7):")
+    out(count_chord_tones(am))
+    out("m4 ornaments (against G#7):")
+    out(count_ornaments(am))
+}
+
+// =============================================================================
+// Axiom 7b: Parameterized Harmonic Rhythm (Cut Time)
+// =============================================================================
+// The Moonlight Sonata is in 2/2 (cut time). Allowing 2 harmony changes
+// per measure means one change per half-bar — standard practice.
+
+example "axiom 7b: harmonic rhythm (cut time, 2 changes/bar)" {
+    let violations = check_harmonic_rhythm_param(accomp_measures, 2) in
+    out("Axiom 7b (Harmonic Rhythm, 2 changes/bar) violations:")
+    out(violations)
+    out("(Compare: original Axiom 7 found 8 violations)")
+}
+
+// =============================================================================
+// Axiom 7b: Count Harmony Changes Per Measure
+// =============================================================================
+
+example "harmony changes per measure" {
+    out("Harmony changes per measure:")
+    out(concat("m1: ", intToStr(count_harmony_changes(acc1))))
+    out(concat("m3: ", intToStr(count_harmony_changes(acc3))))
+    out(concat("m4: ", intToStr(count_harmony_changes(acc4))))
+    out(concat("m7: ", intToStr(count_harmony_changes(acc7))))
+    out(concat("m12: ", intToStr(count_harmony_changes(acc12))))
+}
+
+// =============================================================================
+// Metric Weight of Parallel Fifths at m13
+// =============================================================================
+// The original Axiom 6 detected parallel fifths at measure 13.
+// What is the metric weight of this violation?
+
+example "parallel fifths m13: metric weight" {
+    let ts = TimeSig(2, 2) in
+    let w = weighted_parallel_check(melody_measures, bass_measures, 7, ts) in
+    out("Parallel fifths max metric weight:")
+    out(w)
+    out(concat("Severity: ", parallel_severity(w)))
+}
+
+// =============================================================================
+// Surface vs. Skeleton Summary
+// =============================================================================
+
+example "surface vs skeleton comparison" {
+    out("=== Surface vs. Skeleton Comparison ===")
+    out("")
+
+    out("Axiom 3 (Arpeggio Triads):")
+    let surface_3 = check_arpeggio_triads(accomp_measures) in
+    out(concat("  Surface: first violation at m", intToStr(surface_3 + 1)))
+    let am1 = reduce_measure(acc1, csm_pcs, 1) in
+    let skel_ok = skeleton_is_triad(am1) in
+    out(concat("  Skeleton m1 triad: ", if skel_ok then "SAT" else "VIOLATED"))
+    out("  Verdict: surface violation is due to non-chord tones")
+    out("")
+
+    out("Axiom 6 (Parallel Fifths):")
+    let surface_6 = check_no_parallels(melody_measures, bass_measures, 7) in
+    out(concat("  Surface: violation at m", intToStr(surface_6 + 1)))
+    let ts = TimeSig(2, 2) in
+    let w = weighted_parallel_check(melody_measures, bass_measures, 7, ts) in
+    out(concat("  Metric weight: ", intToStr(w)))
+    out(concat("  Severity: ", parallel_severity(w)))
+    out("")
+
+    out("Axiom 7 (Harmonic Rhythm):")
+    let surface_7 = check_harmonic_rhythm(accomp_measures) in
+    out(concat("  Surface (1 change/bar): ", intToStr(length(surface_7))))
+    out(" violations")
+    let param_7 = check_harmonic_rhythm_param(accomp_measures, 2) in
+    out(concat("  Parameterized (2 changes/bar): ", intToStr(length(param_7))))
+    out(" violations")
+    out("  Verdict: many surface violations are normal cut-time practice")
 }

@@ -52,6 +52,8 @@ data TimeSig = TimeSig(ℤ, ℤ)
 
 // Articulation marks
 data Articulation = Staccato | Accent | Tenuto | Fermata | Marcato
+                  | Downbow | Upbow | Trill | Turn | Mordent
+                  | Breath | Portato | Staccatissimo
 
 // Annotations attached to events (LilyPond post-fixes)
 data Annotation = Tie | SlurStart | SlurEnd
@@ -122,6 +124,15 @@ define tied(e) = Marked(e, Cons(Tie, Nil))
 define staccato(e) = Marked(e, Cons(Artic(Staccato), Nil))
 define accent(e) = Marked(e, Cons(Artic(Accent), Nil))
 define fermata(e) = Marked(e, Cons(Artic(Fermata), Nil))
+define marcato(e) = Marked(e, Cons(Artic(Marcato), Nil))
+define downbow(e) = Marked(e, Cons(Artic(Downbow), Nil))
+define upbow(e) = Marked(e, Cons(Artic(Upbow), Nil))
+define trill_mark(e) = Marked(e, Cons(Artic(Trill), Nil))
+define turn_mark(e) = Marked(e, Cons(Artic(Turn), Nil))
+define mordent_mark(e) = Marked(e, Cons(Artic(Mordent), Nil))
+define breath(e) = Marked(e, Cons(Artic(Breath), Nil))
+define portato(e) = Marked(e, Cons(Artic(Portato), Nil))
+define staccatissimo(e) = Marked(e, Cons(Artic(Staccatissimo), Nil))
 define dyn(e, d) = Marked(e, Cons(Dyn(d), Nil))
 
 // Triplet: 3 events in the time of 2
@@ -203,11 +214,19 @@ define compile_pitch(p) = match p {
 
 // Compile annotations to LilyPond post-fix strings
 define ly_articulation(art) = match art {
-    Staccato => "-."
-  | Accent   => "->"
-  | Tenuto   => "--"
-  | Fermata  => "\\fermata"
-  | Marcato  => "-^"
+    Staccato       => "-."
+  | Accent         => "->"
+  | Tenuto         => "--"
+  | Fermata        => "\\fermata"
+  | Marcato        => "-^"
+  | Downbow        => "\\downbow"
+  | Upbow          => "\\upbow"
+  | Trill          => "\\trill"
+  | Turn           => "\\turn"
+  | Mordent        => "\\mordent"
+  | Breath         => "\\breathe"
+  | Portato        => "\\portato"
+  | Staccatissimo  => "-!"
 }
 
 define ly_annotation(ann) = match ann {
@@ -580,6 +599,26 @@ example "compile dynamic" {
 example "compile staccato" {
     let e = staccato(n(G, Eighth)) in
     assert(compile_event(e) = "g'8-.")
+}
+
+example "compile downbow" {
+    let e = downbow(n(A, Quarter)) in
+    assert(compile_event(e) = "a'4\\downbow")
+}
+
+example "compile upbow" {
+    let e = upbow(n(A, Quarter)) in
+    assert(compile_event(e) = "a'4\\upbow")
+}
+
+example "compile trill" {
+    let e = trill_mark(n(D, Half)) in
+    assert(compile_event(e) = "d'2\\trill")
+}
+
+example "compile staccatissimo" {
+    let e = staccatissimo(n(C, Eighth)) in
+    assert(compile_event(e) = "c'8-!")
 }
 
 example "marked event duration" {
