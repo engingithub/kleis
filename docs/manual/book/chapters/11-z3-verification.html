@@ -3,6 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
+        <link rel="canonical" href="https://kleis.io/docs/manual/book/chapters/11-z3-verification">
         <title>Z3 Verification - The Kleis Manual</title>
 
 
@@ -17,7 +18,7 @@
         </script>
         
 
-        <meta name="description" content="The official guide to the Kleis mathematical specification language">
+        <meta name="description" content="Z3 Verification — Kleis language guide: formal verification, type inference, and Z3 theorem proving.">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="theme-color" content="#ffffff">
 
@@ -43,7 +44,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c3392209.js";
+            window.path_to_searchindex_js = "../searchindex-082d04bd.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-f618dae5.js"></script>
@@ -262,12 +263,96 @@ axiom triangle_ineq : ∀(x : ℝ)(y : ℝ)(a : ℝ)(b : ℝ).
 axiom positive_greater_than_one : ∀(n : ℕ). n &gt; 0 → n &gt; 1
 // Z3: ✗ Invalid, Counterexample: n = 1
 </code></pre>
-<h2 id="timeout-and-limits"><a class="header" href="#timeout-and-limits">Timeout and Limits</a></h2>
+<h2 id="solver-configuration"><a class="header" href="#solver-configuration">Solver Configuration</a></h2>
+<p>Kleis provides fine-grained control over the Z3 solver through environment
+variables. These are runtime controls — they affect <code>kleis test</code> and
+<code>kleis eval</code>, not the build.</p>
+<h3 id="environment-variables"><a class="header" href="#environment-variables">Environment Variables</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Variable</th><th>Default</th><th>Purpose</th></tr>
+</thead>
+<tbody>
+<tr><td><code>KLEIS_Z3_DEBUG=1</code></td><td>off</td><td>Full diagnostics: per-axiom timing, quantifier profiling, solver stats</td></tr>
+<tr><td><code>KLEIS_Z3_TIMEOUT_MS=N</code></td><td>0 (none)</td><td>Z3 internal timeout in milliseconds</td></tr>
+<tr><td><code>KLEIS_Z3_RLIMIT=N</code></td><td>0 (unlimited)</td><td>Deterministic resource limit in work units</td></tr>
+<tr><td><code>KLEIS_Z3_MEMORY_MB=N</code></td><td>2048</td><td>Memory ceiling in megabytes (0 = unlimited)</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong><code>KLEIS_Z3_DEBUG=1</code></strong> enables verbose output: which axioms are being loaded,
+how long each <code>solver.check()</code> call takes, quantifier instantiation counts,
+and the reason when Z3 returns Unknown. This is the first tool to reach for
+when a test is slow or returns an unexpected result.</p>
+<p><strong><code>KLEIS_Z3_RLIMIT</code></strong> is the preferred diagnostic knob for performance issues.
+Unlike wall-clock timeout, the resource limit is <em>deterministic</em> — it produces
+the same result on any hardware, under any system load. A value of 5,000,000
+is a reasonable cap for debugging. Z3 returns Unknown when the limit is hit.</p>
+<p><strong><code>KLEIS_Z3_TIMEOUT_MS</code></strong> sets Z3’s internal timeout. Use with caution: Z3 can
+crash with an internal assertion violation when the timeout fires mid-processing
+of complex quantifier reasoning. The watchdog (see below) is the safe timeout
+mechanism. Only set this for diagnosing specific divergence scenarios.</p>
+<p><strong><code>KLEIS_Z3_MEMORY_MB</code></strong> caps Z3’s memory allocation. Z3 legitimately uses
+several GB for theories with many quantified axioms. The default of 2GB
+is sufficient for all examples in this repository. Set to 0 to disable.</p>
+<h3 id="the-two-layer-safety-architecture"><a class="header" href="#the-two-layer-safety-architecture">The Two-Layer Safety Architecture</a></h3>
+<p>Z3’s internal timeout can fail to trigger during complex quantifier
+instantiation loops, causing <code>solver.check()</code> to hang indefinitely. Kleis
+protects against this with two independent safety layers:</p>
+<p><strong>Layer 1 — External Watchdog (primary):</strong>
+Every <code>solver.check()</code> call is wrapped in a scoped watchdog thread that:</p>
+<ul>
+<li>Polls on a wall-clock timer (timeout + 2 seconds headroom)</li>
+<li>Monitors <code>Z3_get_estimated_alloc_size()</code> against the memory limit</li>
+<li>Calls <code>ContextHandle::interrupt()</code> if either limit is exceeded</li>
+<li>Z3 returns Unknown with reason “canceled” — no crash, no abort</li>
+</ul>
+<p>The watchdog is always active. It is the safe timeout mechanism.</p>
+<p><strong>Layer 2 — Z3 Internal <code>memory_max_size</code> (backstop):</strong>
+Set to 125% of the external memory limit. If the watchdog’s polling interval
+misses a sudden allocation spike, Z3’s internal allocator returns null instead
+of allocating. The vendored z3 crate handles null returns with a clean exit.</p>
+<h3 id="configuration-file"><a class="header" href="#configuration-file">Configuration File</a></h3>
+<p>Z3 settings can also be set in a configuration file:</p>
+<pre><code class="language-toml"># ~/.config/kleis/config.toml  (or config/kleis.toml in project root)
+[z3]
+timeout_ms = 30000
+</code></pre>
+<p>Environment variables override the config file, which overrides defaults.</p>
+<h3 id="diagnostic-workflow"><a class="header" href="#diagnostic-workflow">Diagnostic Workflow</a></h3>
+<p>When a Z3 check is slow or returns Unknown, follow these steps:</p>
+<pre><code class="language-bash"># Step 1: See what's happening inside the solver
+KLEIS_Z3_DEBUG=1 kleis test file.kleis
+
+# Step 2: Cap work units for reproducible diagnosis
+KLEIS_Z3_RLIMIT=5000000 kleis test file.kleis
+
+# Step 3: If memory is the bottleneck, lower the ceiling
+KLEIS_Z3_MEMORY_MB=512 kleis test file.kleis
+
+# Step 4: Hard wall-clock cap (diagnostic only — Z3 may crash internally)
+KLEIS_Z3_TIMEOUT_MS=2000 kleis test file.kleis
+
+# Combined: full diagnostics with resource cap
+KLEIS_Z3_DEBUG=1 KLEIS_Z3_RLIMIT=5000000 kleis test file.kleis
+</code></pre>
+<p>The debug output identifies which axiom or quantifier is causing divergence,
+so you can refactor the problematic expression rather than increasing limits.</p>
+<h3 id="timeout-and-limits"><a class="header" href="#timeout-and-limits">Timeout and Limits</a></h3>
 <p>Complex statements may time out:</p>
-<pre><code class="language-kleis">// Very complex statement
+<pre><code class="language-kleis">// Very complex statement — may exceed solver capacity
 verify ∀ M : Matrix(100, 100) . det(M * M') ≥ 0
 // Result: ⏱ Timeout (statement too complex)
 </code></pre>
+<p>When Z3 returns Unknown, it does <em>not</em> mean the statement is false. It means
+the solver could not determine the answer within its resource budget. Options:</p>
+<ol>
+<li><strong>Increase resources</strong>: raise <code>KLEIS_Z3_RLIMIT</code> or <code>KLEIS_Z3_MEMORY_MB</code></li>
+<li><strong>Simplify the statement</strong>: break it into smaller lemmas</li>
+<li><strong>Add hints</strong>: provide intermediate assertions that guide the solver</li>
+<li><strong>Use Skolemization</strong>: replace existential quantifiers with concrete witnesses</li>
+</ol>
 <h2 id="verifying-nested-quantifiers-grammar-v09"><a class="header" href="#verifying-nested-quantifiers-grammar-v09">Verifying Nested Quantifiers (Grammar v0.9)</a></h2>
 <p>Grammar v0.9 enables nested quantifiers in logical expressions:</p>
 <pre><code class="language-kleis">structure Analysis {

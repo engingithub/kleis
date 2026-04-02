@@ -94,15 +94,114 @@ axiom positive_greater_than_one : ∀(n : ℕ). n > 0 → n > 1
 // Z3: ✗ Invalid, Counterexample: n = 1
 ```
 
-## Timeout and Limits
+## Solver Configuration
+
+Kleis provides fine-grained control over the Z3 solver through environment
+variables. These are runtime controls — they affect `kleis test` and
+`kleis eval`, not the build.
+
+### Environment Variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `KLEIS_Z3_DEBUG=1` | off | Full diagnostics: per-axiom timing, quantifier profiling, solver stats |
+| `KLEIS_Z3_TIMEOUT_MS=N` | 0 (none) | Z3 internal timeout in milliseconds |
+| `KLEIS_Z3_RLIMIT=N` | 0 (unlimited) | Deterministic resource limit in work units |
+| `KLEIS_Z3_MEMORY_MB=N` | 2048 | Memory ceiling in megabytes (0 = unlimited) |
+
+**`KLEIS_Z3_DEBUG=1`** enables verbose output: which axioms are being loaded,
+how long each `solver.check()` call takes, quantifier instantiation counts,
+and the reason when Z3 returns Unknown. This is the first tool to reach for
+when a test is slow or returns an unexpected result.
+
+**`KLEIS_Z3_RLIMIT`** is the preferred diagnostic knob for performance issues.
+Unlike wall-clock timeout, the resource limit is *deterministic* — it produces
+the same result on any hardware, under any system load. A value of 5,000,000
+is a reasonable cap for debugging. Z3 returns Unknown when the limit is hit.
+
+**`KLEIS_Z3_TIMEOUT_MS`** sets Z3's internal timeout. Use with caution: Z3 can
+crash with an internal assertion violation when the timeout fires mid-processing
+of complex quantifier reasoning. The watchdog (see below) is the safe timeout
+mechanism. Only set this for diagnosing specific divergence scenarios.
+
+**`KLEIS_Z3_MEMORY_MB`** caps Z3's memory allocation. Z3 legitimately uses
+several GB for theories with many quantified axioms. The default of 2GB
+is sufficient for all examples in this repository. Set to 0 to disable.
+
+### The Two-Layer Safety Architecture
+
+Z3's internal timeout can fail to trigger during complex quantifier
+instantiation loops, causing `solver.check()` to hang indefinitely. Kleis
+protects against this with two independent safety layers:
+
+**Layer 1 — External Watchdog (primary):**
+Every `solver.check()` call is wrapped in a scoped watchdog thread that:
+
+- Polls on a wall-clock timer (timeout + 2 seconds headroom)
+- Monitors `Z3_get_estimated_alloc_size()` against the memory limit
+- Calls `ContextHandle::interrupt()` if either limit is exceeded
+- Z3 returns Unknown with reason "canceled" — no crash, no abort
+
+The watchdog is always active. It is the safe timeout mechanism.
+
+**Layer 2 — Z3 Internal `memory_max_size` (backstop):**
+Set to 125% of the external memory limit. If the watchdog's polling interval
+misses a sudden allocation spike, Z3's internal allocator returns null instead
+of allocating. The vendored z3 crate handles null returns with a clean exit.
+
+### Configuration File
+
+Z3 settings can also be set in a configuration file:
+
+```toml
+# ~/.config/kleis/config.toml  (or config/kleis.toml in project root)
+[z3]
+timeout_ms = 30000
+```
+
+Environment variables override the config file, which overrides defaults.
+
+### Diagnostic Workflow
+
+When a Z3 check is slow or returns Unknown, follow these steps:
+
+```bash
+# Step 1: See what's happening inside the solver
+KLEIS_Z3_DEBUG=1 kleis test file.kleis
+
+# Step 2: Cap work units for reproducible diagnosis
+KLEIS_Z3_RLIMIT=5000000 kleis test file.kleis
+
+# Step 3: If memory is the bottleneck, lower the ceiling
+KLEIS_Z3_MEMORY_MB=512 kleis test file.kleis
+
+# Step 4: Hard wall-clock cap (diagnostic only — Z3 may crash internally)
+KLEIS_Z3_TIMEOUT_MS=2000 kleis test file.kleis
+
+# Combined: full diagnostics with resource cap
+KLEIS_Z3_DEBUG=1 KLEIS_Z3_RLIMIT=5000000 kleis test file.kleis
+```
+
+The debug output identifies which axiom or quantifier is causing divergence,
+so you can refactor the problematic expression rather than increasing limits.
+
+### Timeout and Limits
 
 Complex statements may time out:
 
 ```kleis
-// Very complex statement
+// Very complex statement — may exceed solver capacity
 verify ∀ M : Matrix(100, 100) . det(M * M') ≥ 0
 // Result: ⏱ Timeout (statement too complex)
 ```
+
+When Z3 returns Unknown, it does *not* mean the statement is false. It means
+the solver could not determine the answer within its resource budget. Options:
+
+1. **Increase resources**: raise `KLEIS_Z3_RLIMIT` or `KLEIS_Z3_MEMORY_MB`
+2. **Simplify the statement**: break it into smaller lemmas
+3. **Add hints**: provide intermediate assertions that guide the solver
+4. **Use Skolemization**: replace existential quantifiers with concrete witnesses
 
 ## Verifying Nested Quantifiers (Grammar v0.9)
 
