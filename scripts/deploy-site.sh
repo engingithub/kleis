@@ -8,8 +8,16 @@
 # Prerequisites:
 #   - mdbook installed          (cargo install mdbook)
 #   - wrangler installed + auth (npm i -g wrangler && wrangler login)
+#   - nvm with Node.js ≥ 20     (nvm install 20)
 
 set -euo pipefail
+
+# Wrangler requires Node.js ≥ 20. Switch via nvm if available.
+export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+if [ -s "$NVM_DIR/nvm.sh" ]; then
+    . "$NVM_DIR/nvm.sh"
+    nvm use 20 --silent 2>/dev/null || nvm use node --silent 2>/dev/null || true
+fi
 
 PROJECT_NAME="kleis"
 SITE_DIR="_site"
