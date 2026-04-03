@@ -374,7 +374,9 @@ define subsec_relation = ArxivSubsection("Relation to Standard Approaches",
 
 - The *'t Hooft classification* uses center symmetry and magnetic monopole condensation. Our abelian/non-abelian classification (Theorem 1) is compatible with 't Hooft's, but derived from kernel admissibility rather than center symmetry.
 
-The POT contribution is a *structural theorem* that sits upstream of these approaches. Non-admissibility is a necessary condition for all of them: the Kugo--Ojima, Gribov, lattice, and 't Hooft approaches all require a non-abelian gauge group, which is precisely the non-admissible case.")
+- The *Hamiltonian boundary approach* of Timoshenko (1995) derives confinement from the Gauss law constraint in Fock--Schwinger gauge. In the confinement phase, the chromo-electric flux through any boundary element is strictly zero, enforcing ``singletness with respect to the group of the residual gauge transformations and hence impossibility of observing coloured objects at spatial infinity.'' This is the dynamical realization of our structural confinement (Theorem 3): his Gauss law constraint is our fiber-invariance condition (Theorem 2), and his ``impossibility of observing coloured objects'' is our ``fiber-non-invariant predicate cannot be determined from observables.'' The correspondence is precise: his approach adds the dynamical content (partition function, mean-field approximation, confinement--deconfinement phase transition, Wilson loop area law) that we explicitly leave open. His result that the transition temperature scales correctly with the string tension in lattice Monte Carlo simulations provides independent evidence that the structural mechanism we identify --- the Gauss law as fiber-invariance --- is the correct algebraic substrate beneath the dynamical confinement.
+
+The POT contribution is a *structural theorem* that sits upstream of these approaches. Non-admissibility is a necessary condition for all of them: the Kugo--Ojima, Gribov, lattice, 't Hooft, and Hamiltonian boundary approaches all require a non-abelian gauge group, which is precisely the non-admissible case.")
 
 define subsec_falsifiability = ArxivSubsection("Falsifiability",
 "The confinement theorem makes a falsifiable structural prediction:
@@ -413,6 +415,7 @@ define ref_gribov = ArxivReference("gribov", "V. N. Gribov, 'Quantization of non
 define ref_kugo_ojima = ArxivReference("kugo-ojima", "T. Kugo and I. Ojima, 'Local covariant operator formalism of non-Abelian gauge theories and quark confinement,' Prog. Theor. Phys. Suppl. 66, 1--130 (1979).")
 define ref_yangmills = ArxivReference("yang-mills", "C. N. Yang and R. L. Mills, 'Conservation of isotopic spin and isotopic gauge invariance,' Phys. Rev. 96, 191--195 (1954).")
 define ref_atiyah_bott = ArxivReference("atiyah-bott", "M. F. Atiyah and R. Bott, 'The Yang--Mills equations over Riemann surfaces,' Phil. Trans. R. Soc. A 308, 523--615 (1983).")
+define ref_timoshenko = ArxivReference("timoshenko", "E. G. Timoshenko, 'Boundary Effects and Confinement in the Theory of Nonabelian Gauge Fields,' Ph.D. thesis, Moscow State University, D. V. Skobeltsyn Institute of Nuclear Physics (1995). arXiv:2405.13189.")
 define ref_kleis = ArxivReference("kleis", "E. Atik, Kleis: A Formal Verification Language, https://kleis.io, 2024--2026.")
 
 // =============================================================================
@@ -556,7 +559,7 @@ define all_elements = [
     sec_conclusion,
     ref_pot_rotation, ref_pot_entanglement, ref_pot_electrodynamics,
     ref_projection_fibers, ref_fiber_dimension,
-    ref_gribov, ref_kugo_ojima, ref_yangmills, ref_atiyah_bott, ref_kleis,
+    ref_gribov, ref_kugo_ojima, ref_yangmills, ref_atiyah_bott, ref_timoshenko, ref_kleis,
     appendix_axioms
 ]
 
