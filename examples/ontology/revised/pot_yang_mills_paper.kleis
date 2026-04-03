@@ -415,6 +415,7 @@ define ref_gribov = ArxivReference("gribov", "V. N. Gribov, 'Quantization of non
 define ref_kugo_ojima = ArxivReference("kugo-ojima", "T. Kugo and I. Ojima, 'Local covariant operator formalism of non-Abelian gauge theories and quark confinement,' Prog. Theor. Phys. Suppl. 66, 1--130 (1979).")
 define ref_yangmills = ArxivReference("yang-mills", "C. N. Yang and R. L. Mills, 'Conservation of isotopic spin and isotopic gauge invariance,' Phys. Rev. 96, 191--195 (1954).")
 define ref_atiyah_bott = ArxivReference("atiyah-bott", "M. F. Atiyah and R. Bott, 'The Yang--Mills equations over Riemann surfaces,' Phil. Trans. R. Soc. A 308, 523--615 (1983).")
+define ref_wilson = ArxivReference("wilson", "K. G. Wilson, 'Confinement of quarks,' Phys. Rev. D 10, 2445--2459 (1974).")
 define ref_timoshenko = ArxivReference("timoshenko", "E. G. Timoshenko, 'Boundary Effects and Confinement in the Theory of Nonabelian Gauge Fields,' Ph.D. thesis, Moscow State University, D. V. Skobeltsyn Institute of Nuclear Physics (1995). arXiv:2405.13189.")
 define ref_kleis = ArxivReference("kleis", "E. Atik, Kleis: A Formal Verification Language, https://kleis.io, 2024--2026.")
 
@@ -559,7 +560,7 @@ define all_elements = [
     sec_conclusion,
     ref_pot_rotation, ref_pot_entanglement, ref_pot_electrodynamics,
     ref_projection_fibers, ref_fiber_dimension,
-    ref_gribov, ref_kugo_ojima, ref_yangmills, ref_atiyah_bott, ref_timoshenko, ref_kleis,
+    ref_gribov, ref_kugo_ojima, ref_yangmills, ref_wilson, ref_atiyah_bott, ref_timoshenko, ref_kleis,
     appendix_axioms
 ]
 
