@@ -190,7 +190,9 @@ define subsec_what_not = ArxivSubsection("What We Do Not Derive",
 - The *breaking pattern* $S U(2) times U(1) arrow.r.long U(1)_(\"em\")$. We derive that the restoring field breaks the gauge symmetry, but not which subgroup survives.
 - The *Yukawa couplings* that generate fermion masses.
 
-These limitations are honest. The paper contributes a *structural necessary condition* for restoration, not a complete theory of electroweak symmetry breaking.")
+We also do not claim that admissibility restoration is the *unique* mechanism by which a non-abelian gauge theory could have observable charges. Our framework formalizes one mechanism --- the introduction of a restoring field that compensates the defect --- and derives its consequences. Whether other mechanisms exist that make charges observable without restoring kernel admissibility is an open question. The conservative position is: within the POT framework, restoration is the only mechanism we have formalized; we do not claim to have proven that no alternative exists. The three-class classification is exhaustive *given* the admissibility framework; it is not claimed to be exhaustive over all conceivable mechanisms.
+
+These limitations are honest. The paper contributes a *structural necessary condition* for restoration, not a complete theory of electroweak symmetry breaking. It is an analytical result --- derived from algebraic structure, not from experiment. We have not performed laboratory experiments or observational measurements; we have identified structural constraints that any empirical theory of admissibility restoration must satisfy.")
 
 define subsec_skolem = ArxivSubsection("The Higgs as Skolem Witness",
 "The structural result has the logical form of an existential statement:
