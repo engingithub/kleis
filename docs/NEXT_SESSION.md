@@ -98,7 +98,53 @@ See above. The revised thesis derives confinement from fiber non-invariance with
 
 **Risk:** High. Natural sequel to Volume IV.
 
-### Option D: The Standard Model Gauge Sector — SU(3) × SU(2) × U(1)
+### Option D: Mass Gap as Topological Obstruction on the Nullspace Variety
+
+**Seed idea (from Gemini review of Volume IV, April 2026):**
+
+Volume IV's Theorem 6 establishes that non-admissible kernels have nonlinear nullspaces (the moduli space of flat connections), while admissible kernels have contractible vector subspace nullspaces. The topology of these two nullspaces is fundamentally different, and this difference may force a spectral gap.
+
+**The argument (not yet formalized):**
+
+| | Admissible (U(1)) | Non-Admissible (YM) |
+|---|---|---|
+| Nullspace | Vector subspace | Nonlinear variety (moduli space) |
+| Topology | Contractible (trivial) | Non-trivial homology (Z, ...) |
+| Excitation | Can shrink continuously to 0 | "Snagged" on topological holes |
+| Spectrum | Continuous (no gap) | Discrete/bounded (mass gap) |
+
+The key move: reframe the mass gap from "What is the lowest eigenvalue of the QCD Hamiltonian?" (dynamical, nobody can answer) to "What is the spectral gap of the Laplacian on the nullspace variety?" (spectral geometry, constrained by topology). This is a POT move — structure replaces dynamics.
+
+**Why it might work:**
+
+- Spectral geometry has hard theorems: the Cheeger inequality bounds the spectral gap below by a geometric constant (the "narrowest bottleneck" of the manifold). Lichnerowicz's theorem says positive Ricci curvature forces a positive spectral gap.
+- The moduli space of flat connections has non-trivial topology for all non-abelian groups. For SU(2) on a Riemann surface of genus g, the moduli space has dimension 3(g-1) and non-trivial fundamental group.
+- Instantons and theta vacua (π₃(SU(N)) = Z) are exactly the topology of the configuration space creating distinct sectors that affect the spectrum. This is already understood in standard physics — we'd be axiomatizing it in POT.
+- Gemini's metaphor: "You aren't calculating a force; you are calculating the lowest possible note on a drum of a certain shape. If the drum has a hole, certain low-frequency notes cannot be played."
+
+**How it would work in Kleis:**
+
+We wouldn't compute eigenvalues (Z3 isn't a numerical solver). We'd axiomatize spectral geometry results and verify the logical chain:
+
+```
+structure SpectralGeometryOnNullspace {
+    axiom cheeger_bound : ∀(K : GreenKernel).
+        implies(not(is_admissible(K)),
+            spectral_gap(nullspace_laplacian(K)) > 0)
+}
+```
+
+Z3 verifies that the chain from non-admissibility → nonlinear nullspace → non-trivial topology → positive spectral gap is internally consistent. The mathematical content comes from spectral geometry; the formal verification comes from Kleis.
+
+**Infrastructure needed:** Axiomatize parts of spectral geometry (Laplacian on varieties, Cheeger inequality, Lichnerowicz theorem). Define a "nullspace Laplacian" in POT terms. Formalize the connection between moduli space topology and spectral bounds.
+
+**Risk:** Very high. Harder than Volume IV (which was algebraic). This requires differential geometry on the moduli space — curvature, Cheeger constants, spectral bounds. But the payoff would be enormous: a structural derivation of the mass gap from the same non-admissibility that produces confinement.
+
+**Status:** Seed idea only. A remark has been added to the Volume IV paper (nullspace subsection) planting this direction. Not committed to as a plan.
+
+---
+
+### Option E: The Standard Model Gauge Sector — SU(3) × SU(2) × U(1)
 
 **Thesis:** Extend the kernel classification to the full Standard Model gauge group. U(1) is the unique admissible sector. SU(2) × U(1) electroweak theory is partially admissible (the U(1) hypercharge factor). SU(3) is fully non-admissible.
 
