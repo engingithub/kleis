@@ -40,8 +40,16 @@ EXCLUDE_URLS = {
 # Additional resources not discovered from SUMMARY.md (PDFs, data files, etc.)
 # Format: (source_description, url_path, priority)
 EXTRA_ENTRIES = [
+    ("docs/papers/spectral_comb_proof.pdf",
+     "/docs/papers/spectral_comb_proof.pdf", 1.0),
+    ("docs/papers/transfer_function_paper.pdf",
+     "/docs/papers/transfer_function_paper.pdf", 1.0),
     ("docs/papers/pot_flat_rotation_curves.pdf",
      "/docs/papers/pot_flat_rotation_curves.pdf", 1.0),
+    ("docs/papers/pot_electrodynamics_paper.pdf",
+     "/docs/papers/pot_electrodynamics_paper.pdf", 1.0),
+    ("docs/papers/pot_yang_mills_paper.pdf",
+     "/docs/papers/pot_yang_mills_paper.pdf", 1.0),
 ]
 
 

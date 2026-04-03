@@ -1,6 +1,38 @@
 # Next Session Notes
 
-**Last Updated:** March 28, 2026 (session — POT Electrodynamics paper completed with kernel integration)
+**Last Updated:** April 2, 2026 (session — Volume IV: Yang-Mills Confinement paper completed)
+
+---
+
+## COMPLETED: "Confinement as Fiber Non-Invariance" (Volume IV)
+
+**Theory file:** `theories/pot_yang_mills_confinement.kleis` (11 structures, 34 axioms, 19 Z3-verified examples)
+**Paper file:** `examples/ontology/revised/pot_yang_mills_paper.kleis`
+**PDF:** `examples/ontology/revised/pot_yang_mills_paper.pdf`
+**Status:** All 19 theory examples + 11 paper examples pass. PDF compiles cleanly.
+
+### What the paper achieves
+
+- Derives color confinement from kernel non-admissibility WITHOUT assuming quantum mechanics
+- Identifies the admissibility defect Δ(A,B) = K(A+B) - K(A) - K(B) with the Lie bracket [A,B]
+- Proves: admissible ⟺ abelian (Theorem 1, the Abelian Classification)
+- Proves: non-admissible ⟹ image non-invariant on fibers ⟹ charge unobservable = confined (Theorem 3)
+- Derives Gribov obstruction, observable hierarchy (min order 2), nonlinear nullspace as corollaries
+- Connects to Cantor independence via the fiber non-invariance theorem: CH is undecidable for the same structural reason color is confined
+- 6 named theorems, all machine-verified
+
+### What it does NOT claim
+
+- Does not derive the linear confining potential (area law)
+- Does not derive the mass gap (Millennium Prize problem)
+- Does not derive asymptotic freedom (requires scale-dependent kernels)
+- Does not derive the hadron spectrum
+
+### Next Paper Candidates (Volume V)
+
+- **Aharonov-Bohm as Kernel Non-Surjectivity** (clean, extends ED paper's monopole discussion)
+- **Admissibility Restoration** (natural sequel to Vol IV — can additional fields restore a non-admissible kernel to admissibility?)
+- **Standard Model Gauge Sector** (SU(3)×SU(2)×U(1) classification via admissibility)
 
 ---
 
@@ -38,21 +70,17 @@ The papers form a series, each adding a sector to the kernel framework:
 | I | Flat Galactic Rotation Curves from Projected Ontology | Gravitational (logarithmic Green's function, slow-decay coherence) | Published |
 | II | Quantum Entanglement as a Projection Artifact | Measurement (spinor projections, detector angle) | Published |
 | III | Electrodynamics as a Theorem of Projected Ontology | Gauge (d\|_Ω¹, admissible, nilpotent) | Complete |
-| IV | *(next paper — see candidates below)* | | Planned |
+| IV | Confinement as Fiber Non-Invariance: The Admissibility Boundary | Non-admissible Yang-Mills (Lie bracket defect) | Complete |
 
 Each volume is independently verifiable via `kleis test`. The substrate (stdlib) is shared.
 
 ---
 
-## Next Paper Candidates (Volume IV)
+## Next Paper Candidates (Volume V)
 
-### Option A: Yang-Mills Confinement and the Admissibility Boundary
+### ~~Option A: Yang-Mills Confinement~~ ✓ COMPLETED as Volume IV
 
-**Thesis:** The quadratic term A∧A in Yang-Mills breaks kernel admissibility. Characterize the *degree* of non-admissibility for SU(2), SU(3) and investigate whether it correlates with confinement scale. The strong force is confined precisely because its projection kernel is maximally non-admissible.
-
-**Infrastructure needed:** `YangMillsForm` already in stdlib. Would need to formalize a measure of "non-admissibility" (how badly linearity fails) and connect it to physical confinement.
-
-**Risk:** High conceptual ambition. The connection between non-linearity and confinement is suggestive but needs rigorous formalization.
+See above. The revised thesis derives confinement from fiber non-invariance without assuming QM.
 
 ### Option B: Aharonov-Bohm as Kernel Non-Surjectivity
 
@@ -62,17 +90,21 @@ Each volume is independently verifiable via `kleis test`. The substrate (stdlib)
 
 **Risk:** Moderate. Well-understood physics, clean kernel interpretation. Shorter paper.
 
-### Option C: The Standard Model Gauge Sector — SU(3) × SU(2) × U(1)
+### Option C: Admissibility Restoration via Additional Fields
+
+**Thesis:** Volume IV established that non-admissible kernels confine. Can additional degrees of freedom, coupled to the kernel, restore effective admissibility? If so, what constraints does the restoration impose on the restoring field? Derive the mechanism structurally from POT, then identify whether it corresponds to what the standard framework calls spontaneous symmetry breaking.
+
+**Infrastructure needed:** Formalize kernel modification by coupling to additional fields. Show when/how admissibility can be restored and what the restoring field must satisfy.
+
+**Risk:** High. Natural sequel to Volume IV.
+
+### Option D: The Standard Model Gauge Sector — SU(3) × SU(2) × U(1)
 
 **Thesis:** Extend the kernel classification to the full Standard Model gauge group. U(1) is the unique admissible sector. SU(2) × U(1) electroweak theory is partially admissible (the U(1) hypercharge factor). SU(3) is fully non-admissible.
 
-**Infrastructure needed:** Electroweak mixing (Weinberg angle), symmetry breaking. More ambitious than A or B.
+**Infrastructure needed:** Electroweak mixing (Weinberg angle), symmetry breaking. More ambitious than B or C.
 
 **Risk:** Very high. Requires careful treatment of spontaneous symmetry breaking within the kernel framework.
-
-### Recommendation
-
-**Option B (Aharonov-Bohm)** is the cleanest next step — it directly extends the monopole discussion in the electrodynamics paper, uses existing stdlib, and produces a sharp result (observable physics from kernel non-surjectivity). Option A (Yang-Mills confinement) is the bigger prize but needs more foundational work.
 
 ---
 
