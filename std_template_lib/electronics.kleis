@@ -1,0 +1,70 @@
+// =============================================================================
+// Electronics Verification Theory
+// =============================================================================
+//
+// Companion theory for electronics.kleist — loaded by /api/verify_graph.
+//
+// The server provides ONLY generic graph primitives (domain-agnostic):
+//   graph_nc, graph_nn          — component/net counts
+//   graph_ctype(c)              — integer type code for component c
+//   graph_param(c, j)           — j-th parameter of component c
+//   graph_inc(net, comp)        — signed incidence (+1 source, -1 target)
+//   TYPE_X                      — type codes (auto-discovered from this file)
+//
+// Electronics component types:
+//   VoltageSource — effort source (dc_voltage, ac_voltage)
+//   CurrentSource — flow source (dc_current)
+//   Ground        — reference node
+//   Passive       — resistor, capacitor, inductor, diode, LED, zener
+//   Active        — transistors, MOSFETs, op-amps
+//   Connector     — wire junction, no-connect, terminal
+//   Measurement   — oscilloscope, multimeter
+// =============================================================================
+
+// Domain interpretation of generic graph data
+
+define is_voltage_source(c) = graph_ctype(c) = TYPE_VoltageSource
+define is_current_source(c) = graph_ctype(c) = TYPE_CurrentSource
+define is_ground(c) = graph_ctype(c) = TYPE_Ground
+define is_passive(c) = graph_ctype(c) = TYPE_Passive
+define is_active(c) = graph_ctype(c) = TYPE_Active
+define is_connector(c) = graph_ctype(c) = TYPE_Connector
+define is_measurement(c) = graph_ctype(c) = TYPE_Measurement
+
+define is_source(c) = is_voltage_source(c) ∨ is_current_source(c)
+define is_load(c) = is_passive(c) ∨ is_active(c)
+
+// =============================================================================
+// Structural verification — checked by Z3
+// =============================================================================
+
+example "GROUND EXISTS: at least one ground reference" {
+    assert(∃(c : ℤ). c ≥ 0 ∧ c < graph_nc ∧ is_ground(c))
+}
+
+example "SOURCE EXISTS: at least one voltage or current source" {
+    assert(∃(c : ℤ). c ≥ 0 ∧ c < graph_nc ∧ is_source(c))
+}
+
+example "LOAD EXISTS: at least one passive or active component" {
+    assert(∃(c : ℤ). c ≥ 0 ∧ c < graph_nc ∧ is_load(c))
+}
+
+example "NO PARALLEL VOLTAGE SOURCES: no two voltage sources share both nets" {
+    assert(∀(s1 : ℤ). ∀(s2 : ℤ).
+        (s1 ≥ 0 ∧ s1 < graph_nc ∧ is_voltage_source(s1) ∧
+         s2 ≥ 0 ∧ s2 < graph_nc ∧ is_voltage_source(s2) ∧
+         ¬(s1 = s2))
+        → ∃(n : ℤ). n ≥ 0 ∧ n < graph_nn ∧
+            ((¬(graph_inc(n, s1) = 0) ∧ graph_inc(n, s2) = 0) ∨
+             (graph_inc(n, s1) = 0 ∧ ¬(graph_inc(n, s2) = 0))))
+}
+
+example "NO SERIES CURRENT SOURCES: no two current sources on the same net" {
+    assert(∀(s1 : ℤ). ∀(s2 : ℤ). ∀(n : ℤ).
+        (s1 ≥ 0 ∧ s1 < graph_nc ∧ is_current_source(s1) ∧
+         s2 ≥ 0 ∧ s2 < graph_nc ∧ is_current_source(s2) ∧
+         ¬(s1 = s2) ∧
+         n ≥ 0 ∧ n < graph_nn)
+        → ¬(¬(graph_inc(n, s1) = 0) ∧ ¬(graph_inc(n, s2) = 0)))
+}

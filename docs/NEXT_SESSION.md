@@ -930,6 +930,71 @@ data model (EditorNode AST), domain data (`.kleist`/`.kleis`), and server APIs.
   domain specialization via extension — same pattern as `stdlib/matrices.kleis` extending
   `minimal_prelude.kleis`.
 
+  **Phase 8 (planned): Graph Theory Domain & Königsberg Demo — arXiv Paper**
+
+  The graph theory domain was added as an architecture validation — a fourth domain
+  (after electronics, bond graphs, Petri nets) implemented with **zero code changes**:
+  only 3 data files (`graph_theory.kleist`, `graph_theory.kleis`, `node.svg`).
+
+  **Königsberg bridges demo:**
+  - 4 graph_node components (landmasses), 7 edges (bridges)
+  - Z3 verification catches parallel edges (SIMPLE GRAPH fails)
+  - Demonstrates: incidence matrix → preamble → companion theory → Z3 result
+  - All 4 nodes have odd degree → no Eulerian path (Euler 1736)
+
+  **arXiv paper** planned to document the Graph Editor architecture:
+  1. The problem: visual graph editors are domain-locked
+  2. The architecture: incidence matrix + domain-agnostic preamble + companion theories
+  3. The demo: Königsberg in 3 files, zero code changes
+  4. The generality: same architecture for Petri nets (BPMN), electronics, bond graphs, graph theory
+  5. The verification: Z3 checks domain-specific properties from data-driven theories
+  6. UX: human-readable verification results (translate Z3 counterexamples to domain terms)
+
+  **Verification UX improvement** (for paper and product):
+  - Current: raw Z3 counterexamples (`n1 = 0, n2 = 0, c = 0`) — meaningless to users
+  - Needed: interpretive layer mapping variable indices back to component/net labels
+  - Positive framing: "MULTIGRAPH: parallel edges found between Node A and Node B"
+    instead of "SIMPLE GRAPH failed"
+
+  **Eulerian path check** requires bounded aggregation (counting incident edges mod 2).
+  Planned as a Kleis language feature — would enable `degree(c)` and parity checks.
+
+  **Short circuit detection — motivates a Kleis reachability primitive:**
+
+  A short circuit is a graph reachability question: "Can I traverse from one
+  terminal of a voltage source to the other using only connector/wire components?"
+  This is Union-Find on the connector-only subgraph of the incidence matrix. It
+  cannot be expressed in first-order logic (requires transitive closure). Writing
+  it as client-side JS would violate the domain-agnostic architecture (it's
+  electronics-specific knowledge). The correct solution is a **Kleis language
+  extension** — a `reachable(n1, n2, filter)` predicate or bounded path search
+  that the evaluator computes from `graph_inc`. This would enable:
+
+  ```kleis
+  // hypothetical future syntax
+  define wire_connected(n1, n2) = reachable(n1, n2, is_connector)
+
+  assert(∀(v : ℤ). is_voltage_source(v)
+      → ¬ wire_connected(net_pos(v), net_neg(v)))
+  ```
+
+  The same primitive generalizes to other domains: deadlock detection in Petri
+  nets (reachable markings), causality propagation in bond graphs (reachable
+  junctions), and connectivity checks in graph theory (Euler paths). This is a
+  concrete use case that motivates adding graph reachability to the Kleis
+  evaluator as a built-in, not a domain-specific workaround.
+
+  **Key insight: reachability is a matrix rank condition, not a graph traversal.**
+  A short circuit exists iff the connector-only submatrix of `graph_inc` has a
+  rank deficiency that places both terminals of a voltage source in the same
+  connected component. This is linear algebra on a filtered submatrix — and
+  Kleis already has matrix operations (rank, determinant). No new `reachable`
+  built-in may be needed; the check could be expressed as a matrix rank condition
+  on the submatrix where `is_connector(c)` holds. The same applies to the ODE
+  formulation: the state-space matrix `M · dX/dt = A·X + B·u` derived from the
+  incidence matrix becomes singular at a short circuit. The singularity is
+  visible in the matrix before the solver even runs.
+
 #### Still open
 
 - ~~**Visual style mismatch with Equation Editor**~~ — DONE. Graph Editor

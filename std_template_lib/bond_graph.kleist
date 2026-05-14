@@ -8,7 +8,9 @@
 //   - Causal stroke (perpendicular bar): which port imposes effort vs flow
 //
 // Metadata fields:
-//   component_type: "Source" | "1-Port" | "2-Port" | "Junction"
+//   component_type: unique per element for Z3 verification
+//     "EffortSource" | "FlowSource" | "Resistor" | "Capacitor" | "Inertia"
+//     "Transformer" | "Gyrator" | "Junction0" | "Junction1"
 //   causality_type: SCAP constraint category for future automatic assignment
 //     - "fixed_effort_out"     (Se: stroke always away)
 //     - "fixed_flow_out"       (Sf: stroke always towards)
@@ -33,6 +35,7 @@
     edge_direction: "directed"
     verify_causality: "true"
     verify_no_isolated: "true"
+    verify_theory: "bond_graph"
 }
 
 // ============ SOURCES ============
@@ -45,7 +48,7 @@
     glyph: "Se"
     mode: "content"
     svg: "static/svg/bond_graph/Se.svg"
-    component_type: "Source"
+    component_type: "EffortSource"
     causality_type: "fixed_effort_out"
     ports: "port:0.5,0.5"
     graph_width: "48"
@@ -60,7 +63,7 @@
     glyph: "Sf"
     mode: "content"
     svg: "static/svg/bond_graph/Sf.svg"
-    component_type: "Source"
+    component_type: "FlowSource"
     causality_type: "fixed_flow_out"
     ports: "port:0.5,0.5"
     graph_width: "48"
@@ -77,7 +80,7 @@
     glyph: "R"
     mode: "content"
     svg: "static/svg/bond_graph/R.svg"
-    component_type: "1-Port"
+    component_type: "Resistor"
     causality_type: "indifferent"
     ports: "port:0.5,0.5"
     graph_width: "48"
@@ -92,7 +95,7 @@
     glyph: "C"
     mode: "content"
     svg: "static/svg/bond_graph/C.svg"
-    component_type: "1-Port"
+    component_type: "Capacitor"
     causality_type: "preferred_effort_out"
     ports: "port:0.5,0.5"
     graph_width: "48"
@@ -107,7 +110,7 @@
     glyph: "I"
     mode: "content"
     svg: "static/svg/bond_graph/I.svg"
-    component_type: "1-Port"
+    component_type: "Inertia"
     causality_type: "preferred_flow_out"
     ports: "port:0.5,0.5"
     graph_width: "48"
@@ -124,7 +127,7 @@
     glyph: "TF"
     mode: "content"
     svg: "static/svg/bond_graph/TF.svg"
-    component_type: "2-Port"
+    component_type: "Transformer"
     causality_type: "constrained_tf"
     ports: "left:0,0.5;right:1,0.5"
     graph_width: "64"
@@ -139,7 +142,7 @@
     glyph: "GY"
     mode: "content"
     svg: "static/svg/bond_graph/GY.svg"
-    component_type: "2-Port"
+    component_type: "Gyrator"
     causality_type: "constrained_gy"
     ports: "left:0,0.5;right:1,0.5"
     graph_width: "64"
@@ -156,7 +159,7 @@
     glyph: "0"
     mode: "content"
     svg: "static/svg/bond_graph/junction_0.svg"
-    component_type: "Junction"
+    component_type: "Junction0"
     causality_type: "constrained_0junc"
     ports: "top:0.5,0;right:1,0.5;bottom:0.5,1;left:0,0.5"
     graph_width: "48"
@@ -171,7 +174,7 @@
     glyph: "1"
     mode: "content"
     svg: "static/svg/bond_graph/junction_1.svg"
-    component_type: "Junction"
+    component_type: "Junction1"
     causality_type: "constrained_1junc"
     ports: "top:0.5,0;right:1,0.5;bottom:0.5,1;left:0,0.5"
     graph_width: "48"

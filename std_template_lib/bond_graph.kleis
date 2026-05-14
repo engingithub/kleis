@@ -1,0 +1,100 @@
+// =============================================================================
+// Bond Graph Verification Theory
+// =============================================================================
+//
+// Companion theory for bond_graph.kleist — loaded by /api/verify_graph.
+//
+// The server provides ONLY generic graph primitives (domain-agnostic):
+//   graph_nc, graph_nn          — component/net counts
+//   graph_ctype(c)              — integer type code for component c
+//   graph_param(c, j)           — j-th parameter of component c
+//   graph_inc(net, comp)        — signed incidence (+1 source, -1 target)
+//   TYPE_X                      — type codes (auto-discovered from this file)
+//
+// Bond graph elements and their SCAP causality categories:
+//   Se (EffortSource)  — fixed effort out
+//   Sf (FlowSource)    — fixed flow out
+//   R  (Resistor)      — indifferent
+//   C  (Capacitor)     — preferred effort out
+//   I  (Inertia)       — preferred flow out
+//   TF (Transformer)   — constrained (one port effort-out, other flow-out)
+//   GY (Gyrator)       — constrained (both ports same causality)
+//   0  (Junction0)     — common effort: exactly one bond brings in effort
+//   1  (Junction1)     — common flow: exactly one bond brings in flow
+// =============================================================================
+
+// Domain interpretation of generic graph data
+
+define is_effort_source(c) = graph_ctype(c) = TYPE_EffortSource
+define is_flow_source(c) = graph_ctype(c) = TYPE_FlowSource
+define is_resistor(c) = graph_ctype(c) = TYPE_Resistor
+define is_capacitor(c) = graph_ctype(c) = TYPE_Capacitor
+define is_inertia(c) = graph_ctype(c) = TYPE_Inertia
+define is_transformer(c) = graph_ctype(c) = TYPE_Transformer
+define is_gyrator(c) = graph_ctype(c) = TYPE_Gyrator
+define is_0junction(c) = graph_ctype(c) = TYPE_Junction0
+define is_1junction(c) = graph_ctype(c) = TYPE_Junction1
+
+define is_source(c) = is_effort_source(c) ∨ is_flow_source(c)
+define is_1port(c) = is_resistor(c) ∨ is_capacitor(c) ∨ is_inertia(c)
+define is_2port(c) = is_transformer(c) ∨ is_gyrator(c)
+define is_junction(c) = is_0junction(c) ∨ is_1junction(c)
+
+// =============================================================================
+// Structural verification — checked by Z3
+// =============================================================================
+
+example "SOURCE EXISTS: at least one source element" {
+    assert(∃(c : ℤ). c ≥ 0 ∧ c < graph_nc ∧ is_source(c))
+}
+
+example "1-PORT EXISTS: at least one dissipative or storage element (R, C, or I)" {
+    assert(∃(c : ℤ). c ≥ 0 ∧ c < graph_nc ∧ is_1port(c))
+}
+
+example "NO EFFORT CONFLICT ON 0-JUNCTION: no two effort sources on same junction" {
+    assert(∀(j : ℤ). ∀(s1 : ℤ). ∀(s2 : ℤ).
+        (j ≥ 0 ∧ j < graph_nc ∧ is_0junction(j) ∧
+         s1 ≥ 0 ∧ s1 < graph_nc ∧ is_effort_source(s1) ∧
+         s2 ≥ 0 ∧ s2 < graph_nc ∧ is_effort_source(s2) ∧
+         ¬(s1 = s2))
+        → ¬(∃(n1 : ℤ). n1 ≥ 0 ∧ n1 < graph_nn ∧
+              ¬(graph_inc(n1, j) = 0) ∧ ¬(graph_inc(n1, s1) = 0) ∧
+              ∃(n2 : ℤ). n2 ≥ 0 ∧ n2 < graph_nn ∧
+              ¬(graph_inc(n2, j) = 0) ∧ ¬(graph_inc(n2, s2) = 0)))
+}
+
+example "NO FLOW CONFLICT ON 1-JUNCTION: no two flow sources on same junction" {
+    assert(∀(j : ℤ). ∀(s1 : ℤ). ∀(s2 : ℤ).
+        (j ≥ 0 ∧ j < graph_nc ∧ is_1junction(j) ∧
+         s1 ≥ 0 ∧ s1 < graph_nc ∧ is_flow_source(s1) ∧
+         s2 ≥ 0 ∧ s2 < graph_nc ∧ is_flow_source(s2) ∧
+         ¬(s1 = s2))
+        → ¬(∃(n1 : ℤ). n1 ≥ 0 ∧ n1 < graph_nn ∧
+              ¬(graph_inc(n1, j) = 0) ∧ ¬(graph_inc(n1, s1) = 0) ∧
+              ∃(n2 : ℤ). n2 ≥ 0 ∧ n2 < graph_nn ∧
+              ¬(graph_inc(n2, j) = 0) ∧ ¬(graph_inc(n2, s2) = 0)))
+}
+
+example "1-PORT CONNECTIVITY: every 1-port element has at least one bond" {
+    assert(∀(c : ℤ). (c ≥ 0 ∧ c < graph_nc ∧ is_1port(c))
+        → ∃(n : ℤ). n ≥ 0 ∧ n < graph_nn ∧ ¬(graph_inc(n, c) = 0))
+}
+
+example "2-PORT CONNECTIVITY: every transformer/gyrator has at least two bonds" {
+    assert(∀(c : ℤ). (c ≥ 0 ∧ c < graph_nc ∧ is_2port(c))
+        → ∃(n1 : ℤ). ∃(n2 : ℤ).
+            n1 ≥ 0 ∧ n1 < graph_nn ∧
+            n2 ≥ 0 ∧ n2 < graph_nn ∧
+            ¬(n1 = n2) ∧
+            ¬(graph_inc(n1, c) = 0) ∧ ¬(graph_inc(n2, c) = 0))
+}
+
+example "JUNCTION HAS BONDS: every junction connects to at least 2 elements" {
+    assert(∀(j : ℤ). (j ≥ 0 ∧ j < graph_nc ∧ is_junction(j))
+        → ∃(n1 : ℤ). ∃(n2 : ℤ).
+            n1 ≥ 0 ∧ n1 < graph_nn ∧
+            n2 ≥ 0 ∧ n2 < graph_nn ∧
+            ¬(n1 = n2) ∧
+            ¬(graph_inc(n1, j) = 0) ∧ ¬(graph_inc(n2, j) = 0))
+}

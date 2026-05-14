@@ -3030,50 +3030,73 @@ mod verify_graph_tests {
     }
 
     #[test]
-    fn electronics_no_theory() {
+    fn electronics_has_theory() {
+        // electronics.kleis now exists — verify it loads and runs checks
         let req = VerifyGraphRequest {
             domain: "electronics".to_string(),
             components: vec![
                 comp("resistor", "Passive", vec![("R", serde_json::json!(1000))]),
-                comp("dc_voltage", "Source", vec![("V", serde_json::json!(5))]),
+                comp(
+                    "dc_voltage",
+                    "VoltageSource",
+                    vec![("V", serde_json::json!(5))],
+                ),
+                comp("ground", "Ground", vec![]),
             ],
             incidence: VerifyGraphIncidence {
-                entries: vec![entry(0, 1, 1), entry(0, 3, -1)],
-                v: 1,
-                p: 4,
+                entries: vec![
+                    entry(0, 0, 1),
+                    entry(0, 2, -1),
+                    entry(1, 1, -1),
+                    entry(1, 3, -1),
+                    entry(1, 4, -1),
+                ],
+                v: 2,
+                p: 5,
             },
             port_labels: vec![
-                "0:left".into(),
-                "0:right".into(),
-                "1:pos".into(),
-                "1:neg".into(),
+                "0:pos".into(),
+                "0:neg".into(),
+                "1:left".into(),
+                "1:right".into(),
+                "2:pin".into(),
             ],
         };
         let resp = verify_graph_core(req);
-        assert!(!resp.success);
-        assert!(resp.error.is_some());
-        assert!(resp.error.unwrap().contains("No companion theory file"));
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        assert!(!resp.results.is_empty(), "expected Z3 results from theory");
     }
 
     #[test]
-    fn bond_graph_no_theory() {
+    fn bond_graph_has_theory() {
+        // bond_graph.kleis now exists — verify it loads and runs checks
         let req = VerifyGraphRequest {
             domain: "bond_graph".to_string(),
             components: vec![
-                comp("bg_effort_source", "Source", vec![]),
-                comp("bg_1junction", "Junction", vec![]),
+                comp("bg_effort_source", "EffortSource", vec![]),
+                comp("bg_junction_1", "Junction1", vec![]),
+                comp("bg_resistor", "Resistor", vec![]),
             ],
             incidence: VerifyGraphIncidence {
-                entries: vec![entry(0, 0, 1), entry(0, 1, -1)],
-                v: 1,
-                p: 2,
+                entries: vec![
+                    entry(0, 0, 1),
+                    entry(0, 1, -1),
+                    entry(1, 2, 1),
+                    entry(1, 3, -1),
+                ],
+                v: 2,
+                p: 4,
             },
-            port_labels: vec!["0:port".into(), "1:port".into()],
+            port_labels: vec![
+                "0:port".into(),
+                "1:left".into(),
+                "1:right".into(),
+                "2:port".into(),
+            ],
         };
         let resp = verify_graph_core(req);
-        assert!(!resp.success);
-        assert!(resp.error.is_some());
-        assert!(resp.error.unwrap().contains("No companion theory file"));
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        assert!(!resp.results.is_empty(), "expected Z3 results from theory");
     }
 
     // -------------------------------------------------------------------------
@@ -3152,5 +3175,380 @@ mod verify_graph_tests {
             assert!(r.passed, "example '{}' failed: {:?}", r.name, r.error);
         }
         assert!(resp.success);
+    }
+
+    // =========================================================================
+    // Bond graph verification tests
+    // =========================================================================
+
+    fn bond_graph_simple_se_r() -> VerifyGraphRequest {
+        // Se --[n0]--> 1-junction --[n1]--> R
+        // 3 components, 2 nets, each component has 1 port (sources/1-ports)
+        // and 4 ports (junction)
+        VerifyGraphRequest {
+            domain: "bond_graph".to_string(),
+            components: vec![
+                comp("bg_effort_source", "EffortSource", vec![]),
+                comp("bg_junction_1", "Junction1", vec![]),
+                comp("bg_resistor", "Resistor", vec![]),
+            ],
+            incidence: VerifyGraphIncidence {
+                entries: vec![
+                    entry(0, 0, 1),
+                    entry(0, 2, -1),
+                    entry(1, 3, 1),
+                    entry(1, 5, -1),
+                ],
+                v: 2,
+                p: 6,
+            },
+            port_labels: vec![
+                "0:port".into(),
+                "1:top".into(),
+                "1:right".into(),
+                "1:bottom".into(),
+                "1:left".into(),
+                "2:port".into(),
+            ],
+        }
+    }
+
+    #[test]
+    fn bond_graph_simple_circuit_passes() {
+        let resp = verify_graph_core(bond_graph_simple_se_r());
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        for r in &resp.results {
+            assert!(r.passed, "example '{}' failed: {:?}", r.name, r.error);
+        }
+        assert!(resp.success);
+    }
+
+    #[test]
+    fn bond_graph_preamble_has_refined_types() {
+        let preamble = build_graph_preamble(&bond_graph_simple_se_r(), "");
+        assert!(
+            preamble.contains("TYPE_EffortSource"),
+            "missing TYPE_EffortSource"
+        );
+        assert!(
+            preamble.contains("TYPE_Junction1"),
+            "missing TYPE_Junction1"
+        );
+        assert!(preamble.contains("TYPE_Resistor"), "missing TYPE_Resistor");
+    }
+
+    #[test]
+    fn bond_graph_effort_conflict_fails() {
+        // Two Se on the same 0-junction — effort conflict
+        let req = VerifyGraphRequest {
+            domain: "bond_graph".to_string(),
+            components: vec![
+                comp("bg_effort_source", "EffortSource", vec![]),
+                comp("bg_effort_source", "EffortSource", vec![]),
+                comp("bg_junction_0", "Junction0", vec![]),
+                comp("bg_resistor", "Resistor", vec![]),
+            ],
+            incidence: VerifyGraphIncidence {
+                entries: vec![
+                    entry(0, 0, 1),
+                    entry(0, 2, -1),
+                    entry(1, 1, 1),
+                    entry(1, 3, -1),
+                    entry(2, 4, 1),
+                    entry(2, 7, -1),
+                ],
+                v: 3,
+                p: 8,
+            },
+            port_labels: vec![
+                "0:port".into(),
+                "1:port".into(),
+                "2:top".into(),
+                "2:right".into(),
+                "2:bottom".into(),
+                "2:left".into(),
+                "3:port".into(),
+                "3:port".into(),
+            ],
+        };
+        let resp = verify_graph_core(req);
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let conflict = resp
+            .results
+            .iter()
+            .find(|r| r.name.contains("EFFORT CONFLICT"));
+        assert!(
+            conflict.is_some(),
+            "expected EFFORT CONFLICT check in results"
+        );
+        assert!(
+            !conflict.unwrap().passed,
+            "EFFORT CONFLICT should fail with two Se on same 0-junction"
+        );
+    }
+
+    #[test]
+    fn bond_graph_rlc_with_junctions_passes() {
+        // Se --[n0]--> 1-junc --[n1]--> 0-junc --[n2]--> R
+        //                                  |---[n3]--> C
+        //                                  |---[n4]--> I
+        let req = VerifyGraphRequest {
+            domain: "bond_graph".to_string(),
+            components: vec![
+                comp("bg_effort_source", "EffortSource", vec![]),
+                comp("bg_junction_1", "Junction1", vec![]),
+                comp("bg_junction_0", "Junction0", vec![]),
+                comp("bg_resistor", "Resistor", vec![]),
+                comp("bg_capacitor", "Capacitor", vec![]),
+                comp("bg_inertia", "Inertia", vec![]),
+            ],
+            incidence: VerifyGraphIncidence {
+                entries: vec![
+                    entry(0, 0, 1),
+                    entry(0, 1, -1),
+                    entry(1, 2, 1),
+                    entry(1, 5, -1),
+                    entry(2, 6, 1),
+                    entry(2, 9, -1),
+                    entry(3, 7, 1),
+                    entry(3, 10, -1),
+                    entry(4, 8, 1),
+                    entry(4, 11, -1),
+                ],
+                v: 5,
+                p: 12,
+            },
+            port_labels: vec![
+                "0:port".into(),
+                "1:top".into(),
+                "1:right".into(),
+                "1:bottom".into(),
+                "1:left".into(),
+                "2:top".into(),
+                "2:right".into(),
+                "2:bottom".into(),
+                "2:left".into(),
+                "3:port".into(),
+                "4:port".into(),
+                "5:port".into(),
+            ],
+        };
+        let resp = verify_graph_core(req);
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        for r in &resp.results {
+            assert!(r.passed, "example '{}' failed: {:?}", r.name, r.error);
+        }
+        assert!(resp.success);
+    }
+
+    #[test]
+    fn bond_graph_no_load_fails() {
+        // Two Se + junctions but no R/C/I — should fail "1-PORT EXISTS"
+        let req = VerifyGraphRequest {
+            domain: "bond_graph".to_string(),
+            components: vec![
+                comp("bg_effort_source", "EffortSource", vec![]),
+                comp("bg_junction_1", "Junction1", vec![]),
+                comp("bg_effort_source", "EffortSource", vec![]),
+                comp("bg_junction_0", "Junction0", vec![]),
+            ],
+            incidence: VerifyGraphIncidence {
+                entries: vec![
+                    entry(0, 0, 1),
+                    entry(0, 4, -1),
+                    entry(1, 5, 1),
+                    entry(1, 9, -1),
+                    entry(2, 3, 1),
+                    entry(2, 6, -1),
+                ],
+                v: 3,
+                p: 10,
+            },
+            port_labels: vec![
+                "0:port".into(),
+                "1:top".into(),
+                "1:right".into(),
+                "1:bottom".into(),
+                "1:left".into(),
+                "2:port".into(),
+                "3:top".into(),
+                "3:right".into(),
+                "3:bottom".into(),
+                "3:left".into(),
+            ],
+        };
+        let resp = verify_graph_core(req);
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let load_check = resp
+            .results
+            .iter()
+            .find(|r| r.name.contains("1-PORT EXISTS"));
+        assert!(load_check.is_some(), "expected 1-PORT EXISTS check");
+        assert!(
+            !load_check.unwrap().passed,
+            "1-PORT EXISTS should fail when no R/C/I present"
+        );
+    }
+
+    // =========================================================================
+    // Electronics verification tests
+    // =========================================================================
+
+    fn electronics_simple_circuit() -> VerifyGraphRequest {
+        // dc_voltage + resistor + ground: minimal valid circuit
+        VerifyGraphRequest {
+            domain: "electronics".to_string(),
+            components: vec![
+                comp(
+                    "dc_voltage",
+                    "VoltageSource",
+                    vec![("V", serde_json::json!(5))],
+                ),
+                comp("resistor", "Passive", vec![("R", serde_json::json!(1000))]),
+                comp("ground", "Ground", vec![]),
+            ],
+            incidence: VerifyGraphIncidence {
+                entries: vec![
+                    entry(0, 0, 1),
+                    entry(0, 2, -1),
+                    entry(1, 3, 1),
+                    entry(1, 1, -1),
+                    entry(1, 4, -1),
+                ],
+                v: 2,
+                p: 5,
+            },
+            port_labels: vec![
+                "0:pos".into(),
+                "0:neg".into(),
+                "1:left".into(),
+                "1:right".into(),
+                "2:pin".into(),
+            ],
+        }
+    }
+
+    #[test]
+    fn electronics_simple_circuit_passes() {
+        let resp = verify_graph_core(electronics_simple_circuit());
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        for r in &resp.results {
+            assert!(r.passed, "example '{}' failed: {:?}", r.name, r.error);
+        }
+        assert!(resp.success);
+    }
+
+    #[test]
+    fn electronics_preamble_has_refined_types() {
+        let preamble = build_graph_preamble(&electronics_simple_circuit(), "");
+        assert!(
+            preamble.contains("TYPE_VoltageSource"),
+            "missing TYPE_VoltageSource"
+        );
+        assert!(preamble.contains("TYPE_Passive"), "missing TYPE_Passive");
+        assert!(preamble.contains("TYPE_Ground"), "missing TYPE_Ground");
+    }
+
+    #[test]
+    fn electronics_no_ground_fails() {
+        let req = VerifyGraphRequest {
+            domain: "electronics".to_string(),
+            components: vec![
+                comp(
+                    "dc_voltage",
+                    "VoltageSource",
+                    vec![("V", serde_json::json!(5))],
+                ),
+                comp("resistor", "Passive", vec![("R", serde_json::json!(1000))]),
+            ],
+            incidence: VerifyGraphIncidence {
+                entries: vec![
+                    entry(0, 0, 1),
+                    entry(0, 2, -1),
+                    entry(1, 3, 1),
+                    entry(1, 1, -1),
+                ],
+                v: 2,
+                p: 4,
+            },
+            port_labels: vec![
+                "0:pos".into(),
+                "0:neg".into(),
+                "1:left".into(),
+                "1:right".into(),
+            ],
+        };
+        let resp = verify_graph_core(req);
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let ground_check = resp
+            .results
+            .iter()
+            .find(|r| r.name.contains("GROUND EXISTS"));
+        assert!(
+            ground_check.is_some(),
+            "expected GROUND EXISTS check in results"
+        );
+        assert!(
+            !ground_check.unwrap().passed,
+            "GROUND EXISTS should fail when no ground component"
+        );
+    }
+
+    #[test]
+    fn electronics_parallel_voltage_sources_fails() {
+        // Two dc_voltage sharing both nets — effort conflict
+        let req = VerifyGraphRequest {
+            domain: "electronics".to_string(),
+            components: vec![
+                comp(
+                    "dc_voltage",
+                    "VoltageSource",
+                    vec![("V", serde_json::json!(5))],
+                ),
+                comp(
+                    "dc_voltage",
+                    "VoltageSource",
+                    vec![("V", serde_json::json!(12))],
+                ),
+                comp("resistor", "Passive", vec![("R", serde_json::json!(1000))]),
+                comp("ground", "Ground", vec![]),
+            ],
+            incidence: VerifyGraphIncidence {
+                entries: vec![
+                    entry(0, 0, 1),
+                    entry(0, 2, 1),
+                    entry(0, 4, -1),
+                    entry(1, 1, -1),
+                    entry(1, 3, -1),
+                    entry(1, 5, -1),
+                    entry(1, 6, -1),
+                ],
+                v: 2,
+                p: 7,
+            },
+            port_labels: vec![
+                "0:pos".into(),
+                "0:neg".into(),
+                "1:pos".into(),
+                "1:neg".into(),
+                "2:left".into(),
+                "2:right".into(),
+                "3:pin".into(),
+            ],
+        };
+        let resp = verify_graph_core(req);
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let parallel = resp
+            .results
+            .iter()
+            .find(|r| r.name.contains("PARALLEL VOLTAGE"));
+        assert!(
+            parallel.is_some(),
+            "expected PARALLEL VOLTAGE SOURCES check"
+        );
+        assert!(
+            !parallel.unwrap().passed,
+            "PARALLEL VOLTAGE SOURCES should fail when two vsources share both nets"
+        );
     }
 }

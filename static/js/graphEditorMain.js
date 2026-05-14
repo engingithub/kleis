@@ -429,9 +429,7 @@ function verifyGraph() {
         });
     }
 
-    const structuralFailed = results.some(r => !r.pass);
-
-    if (structuralFailed || !domainConfig.verify_theory) {
+    if (!domainConfig.verify_theory) {
         showVerifyResults(results);
         return;
     }
