@@ -1,6 +1,6 @@
 # Next Session Notes
 
-**Last Updated:** April 27, 2026
+**Last Updated:** May 14, 2026
 
 ---
 
@@ -660,9 +660,9 @@ mode inside `$...$`. Needs experimental verification during implementation.
 
 ---
 
-### Graph Editor — IMPLEMENTED (Phase 1)
+### Graph Editor — IMPLEMENTED (Phases 1–6)
 
-**Status:** Phase 1 complete. Domain-agnostic routing engine working.
+**Status:** Phases 1–6 complete. Domain-agnostic routing, parameters, and Z3 verification working.
 **ADR:** `docs/adr/ADR-037-Graph-Editor-Domain-Agnostic-Routing.md`
 **Plan file:** `.cursor/plans/domain-agnostic_multi-port_routing_83985610.plan.md`
 
@@ -762,9 +762,11 @@ data model (EditorNode AST), domain data (`.kleist`/`.kleis`), and server APIs.
 | `static/js/graphEditorMain.js` | Core editor: interaction, routing, rendering (~1644 lines) |
 | `std_template_lib/electronics.kleist` | 20 electronic components + `__domain_electronics` config |
 | `std_template_lib/bond_graph.kleist` | 9 bond graph elements + `__domain_bond_graph` config |
+| `std_template_lib/petri_net.kleist` | Place + transition templates + `__domain_petri_net` config |
 | `graph-editor-wasm/` | Rust/WASM crate (scaffold, not in active code path) |
 | `static/svg/electronics/` | SVG assets for electronic components |
 | `static/svg/bond_graph/` | SVG assets for bond graph elements |
+| `static/svg/petri_net/` | SVG assets for Petri net elements |
 
 #### Remaining phases
 
@@ -784,55 +786,149 @@ data model (EditorNode AST), domain data (`.kleist`/`.kleis`), and server APIs.
 - `causality_type` metadata on each template for future SCAP algorithm
 - Typst export includes causal bar rendering
 
-**Phase 4: Petri net templates**
-- `petri_net.kleist` with place/transition templates
-- Token state rendering inside place SVGs
-- Simulation integration with existing ODE solver
+**Phase 4: Petri net / workflow net templates** — DONE
+- `std_template_lib/petri_net.kleist` with 4 component types + `__domain_petri_net` config
+- Source place (`◉` circle with inner dot) — workflow start, carries initial token
+- Regular place (`○` empty circle) — intermediate state / condition
+- Sink place (`◎` double circle) — workflow end, proper completion target
+- Transition (`▮` filled bar) — activity / event / task
+- `edge_decoration: "arrow"`, `edge_direction: "directed"`, `routing_mode: "orthogonal"`
+- SVGs: `static/svg/petri_net/{place,source_place,sink_place,transition}.svg`
+- Template header documents workflow net = BPMN equivalence and soundness property
+- component_type metadata: `SourcePlace`, `Place`, `SinkPlace`, `Transition`
+- **Deferred items:**
+  - Token rendering inside places (needs Phase 5 component parameters: `pn_place(tokens=3)`)
+  - Inhibitor arcs (need per-arc decoration support; SVG marker already exists from Phase 2)
+  - Arc weight labels (need per-arc metadata; ties into signed incidence matrix weights)
+  - VERIFY / SAT buttons (see Phase 6)
 
-**Phase 5: Component parameters (Option A — parameterized operations)**
-- Components become parameterized operations in the AST:
-  `resistor(1000)` instead of `resistor()`, `dc_voltage(5)` instead of `dc_voltage()`
-- The `.kleist` template `pattern` field declares parameters:
-  `resistor(R)` tells the editor this component needs one numeric parameter
-- UI: property panel — click a component, edit its parameter values
-- Graph state stores `params` per component; AST encodes them as operation args
-- This follows the same pattern as Petri net axioms (`iw(0,0) = 1`): concrete
-  values that Z3 can reason about
+**Petri net ↔ BPMN mapping** (reference for VERIFY implementation):
+
+| BPMN Element   | Workflow Net Element           | Kleis Template       |
+|----------------|-------------------------------|----------------------|
+| Start event    | Source place (initial token)   | `pn_source_place`    |
+| End event      | Sink place                    | `pn_sink_place`      |
+| Activity/Task  | Transition                    | `pn_transition`      |
+| Condition      | Place                         | `pn_place`           |
+| XOR split      | Place with multiple out-arcs  | (topology, not type) |
+| AND split      | Transition with multiple outs | (topology, not type) |
+| Sequence flow  | Directed arc                  | (wire with arrow)    |
+
+**Phase 5: Component parameters + structural VERIFY** — DONE
+- `params` metadata in `.kleist`: `"name:type:default"` semicolon-separated (like `ports`)
+- Petri nets: `pn_source_place(tokens:int:1)`, `pn_place(tokens:int:0)`, `pn_sink_place(tokens:int:0)`
+- Electronics: `resistor(R:real:1000)`, `capacitor(C:real:1e-6)`, `inductor(L:real:1e-3)`,
+  `dc_voltage(V:real:5)`, `ac_voltage(V:real:120;freq:real:60)`, `dc_current(I:real:0.01)`
+- `loadComponentDefs()` now stores `componentType`, `causalityType`, parsed `params` array
+- `graphState.components[]` carries `params: {name: value}` initialized from defaults
+- Property panel: editable inputs for each param when component selected
+- AST encoding: `resistor(1000)` not `resistor()` — params become operation args
+- Incidence matrix sign convention: connection index 0 = +1 (source), others = -1 (target)
+  — encodes arc direction from user click order
+- **VERIFY button**: generic data-driven structural checks from `verify_*` domain metadata
+  - `verify_bipartite`, `verify_exactly_one`, `verify_requires_type`, `verify_no_isolated`,
+    `verify_all_connected`, `verify_causality` — all read from `__domain_*` template metadata
+  - No domain-specific JS functions. New domains add rules as `.kleist` metadata only.
+  - Results shown in overlay panel with pass/fail per check
+
+  **Decisions made:**
+  - Arc weights: deferred — all arcs weight 1 for now. Most Petri nets use unit weights.
+  - Token rendering: deferred to simulation phase. Initial marking is a parameter (property
+    panel), not a visual overlay. Dots inside places only make sense during step-through
+    simulation when tokens move between places.
+  - Graph operations for Z3: generic primitives (`graph_incidence`, `graph_param`,
+    `graph_component_type`). Server provides domain-agnostic graph data; companion `.kleis`
+    theory derives domain semantics. No domain-specific Rust code.
 
   **Parameter type system (data-driven, no domain JS):**
 
   | Type | Example | UI widget | AST encoding |
   |------|---------|-----------|-------------|
-  | `real` | resistance=1000 | number input | operation arg |
-  | `int` | tokens=3 | integer spinner | operation arg |
-  | `enum` | element=C | dropdown | operation arg |
-  | `ref` | model=2N2222 | dropdown (from server) | operation arg (name) |
-  | edge weight | bond_order=2 | weight editor on wire | incidence matrix value |
+  | `real` | R=1000 | number input | operation arg |
+  | `int` | tokens=3 | number input (step=1) | operation arg |
+  | `enum` | element=C | dropdown (future) | operation arg |
+  | `ref` | model=2N2222 | dropdown from server (future) | operation arg (name) |
 
   **Separation of duties — Graph Editor never reads .kleis theory files:**
   - Template metadata (params, ports) comes from `/api/templates` (server reads `.kleist`)
   - Available models for `ref` params come from a new `/api/models?structure=X` endpoint
     (server reads `.kleis` theory, returns list of `define` names matching the structure)
-  - Parameter validation via `/api/type_check` (server + Z3)
-  - Circuit correctness axioms via `/api/verify` (server + Z3)
-  - The Graph Editor only knows: "this param is type `ref`, the server gave me these
-    options." It never parses Kleis. Same pattern as the existing palette loading.
+  - Structural verification: client-side JS reading `verify_*` metadata
+  - Deep Z3 verification: server-side via companion `.kleis` theory (Phase 6)
 
-  **Molecules are graphs, not components:**
-  A molecule is built by placing `atom("C")` components and drawing bonds. Bond order
-  is the incidence matrix entry magnitude. No special molecule component needed.
+**Phase 6: Z3 verification via companion `.kleis` theory** — DONE
+- Companion `.kleis` file convention: `std_template_lib/petri_net.kleis` next to
+  `petri_net.kleist`. Domain config references it via `verify_theory: "petri_net"`.
+- **CRITICAL ARCHITECTURAL DECISION: `server.rs` contains ZERO domain-specific code.**
+  The server emits only generic graph primitives; companion `.kleis` theories derive
+  all domain semantics from those primitives.
+- Server `POST /api/verify_graph` endpoint:
+  1. Load companion `.kleis` theory from domain config `verify_theory`
+  2. Generate **domain-agnostic** preamble from graph data (see below)
+  3. Concatenate preamble + theory, parse, evaluate, run examples via Z3
+  4. Return per-example pass/fail results as JSON
+  5. Use `tokio::task::spawn_blocking` (Z3 thread-local context safety)
+- **Domain-agnostic preamble** — `build_graph_preamble(req, theory_source)` emits:
+  - `graph_nc`, `graph_nn` — component/net counts
+  - `graph_ctype(c)` — integer type code per component (auto-assigned from component_type strings)
+  - `graph_param(c, j)` — positional parameters from component params
+  - `graph_inc(net, comp)` — component-level incidence matrix (port-level entries aggregated)
+  - `TYPE_X` constants — one per unique component_type, with distinctness/positivity axioms
+  - **Closed-world axioms** for `ctype`, `inc`, and `param` (prevents Z3 from inventing values)
+  - **Theory scanning** for `TYPE_X` references: assigns unused codes to types the theory
+    references but the graph doesn't contain (prevents Z3 from equating undefined TYPE constants
+    with existing ones)
+- Companion theory `petri_net.kleis` derives domain semantics entirely from generic primitives:
+  `is_place(c)`, `is_transition(c)`, `is_source(c)`, `is_sink(c)`, `tokens(c)` as `define`
+  statements, plus `example` blocks for INITIAL MARKING, BIPARTITE, SOURCE EXISTS, SINK EXISTS.
+- **23 Rust tests** covering: preamble structure (type codes, params, incidence, closed-world,
+  distinctness, no domain-specific ops), Z3 pass/fail cases (linear workflow, no tokens, no sink,
+  non-bipartite, empty graph, fork, join, mutex), missing theory errors.
+- **Manually tested end-to-end**: Graph Editor → VERIFY button → 5 JS structural checks +
+  4 Z3 verified examples → all green.
+- **BMC removed**: Bounded Model Checking (BFS reachable states) was initially prototyped in
+  server.rs but removed because it contained domain-specific Petri-net code. Structural
+  verification via Z3 quantifiers is sufficient for current checks. If BMC is needed later,
+  it should be a generic graph analysis module, not embedded in server.rs.
+- **ADR-037 updated** to Phases 1–5 with full verification architecture documented.
 
-  **Hierarchical composition (open question):**
-  Can a component in one graph be a graph itself? An op-amp is internally a circuit.
-  A protein is a molecule. This is the "graph inside graph" problem — needs design.
+  **Phase 7 (planned, new feature branch): Causal Network Verification Theories**
 
-**Phase 6: Type inference + Z3 verification**
-- Graph/CircuitGraph structures in stdlib
-- Type checking via existing server APIs
-- Kirchhoff's law axioms: `V(a) - V(b) = I * R` where R comes from component arg
-- Safety checks: "does this circuit have a short?" as SAT query
-- Connects to existing `examples/petri-nets/` pattern: net structure axioms
-  + enabling/firing semantics + invariant verification
+  Electronics and bond graphs share verification rules because both are instances
+  of the **effort/flow duality** from network thermodynamics:
+
+  | Concept | Electronics | Bond Graphs | General |
+  |---------|------------|-------------|---------|
+  | Effort variable | Voltage (V) | Effort (e) | Across variable |
+  | Flow variable | Current (I) | Flow (f) | Through variable |
+  | Source conflict | 2 voltage sources in parallel | 2 effort sources on same 0-junction | Conflicting effort constraints |
+  | Source conflict | 2 current sources in series | 2 flow sources on same 1-junction | Conflicting flow constraints |
+  | Short circuit | Voltage source shorted | Effort source with zero impedance path | Zero-resistance effort loop |
+
+  **Layered theory architecture:**
+
+  ```
+  std_template_lib/causal_network.kleis     ← shared effort/flow conflict rules
+  std_template_lib/electronics.kleis        ← imports causal_network, adds KVL/KCL
+  std_template_lib/bond_graph.kleis         ← imports causal_network, adds causality assignment
+  ```
+
+  The shared `causal_network.kleis` would define generic rules derivable from
+  the graph primitives (`graph_nc`, `graph_ctype`, `graph_inc`, `graph_param`):
+  - No two effort sources on the same node
+  - No two flow sources in the same loop
+  - Every node must have at least one path to a reference
+  - Source/sink balance
+
+  Domain-specific theories add their own:
+  - **Electronics**: Kirchhoff's voltage/current laws, component equations (V=IR, I=CdV/dt),
+    short-circuit detection as SAT query
+  - **Bond graphs**: SCAP causality assignment, 0-junction (common effort) and 1-junction
+    (common flow) constraints, causality conflict detection
+
+  This layered approach uses Kleis's structure system: shared axioms in a base structure,
+  domain specialization via extension — same pattern as `stdlib/matrices.kleis` extending
+  `minimal_prelude.kleis`.
 
 #### Still open
 

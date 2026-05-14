@@ -299,6 +299,54 @@ struct CheckSatResponse {
     error: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct VerifyGraphRequest {
+    domain: String,
+    components: Vec<VerifyGraphComponent>,
+    incidence: VerifyGraphIncidence,
+    port_labels: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VerifyGraphComponent {
+    #[serde(rename = "type")]
+    comp_type: String,
+    component_type: Option<String>,
+    params: Option<std::collections::HashMap<String, serde_json::Value>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct VerifyGraphIncidence {
+    entries: Vec<VerifyGraphEntry>,
+    v: usize,
+    p: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct VerifyGraphEntry {
+    net: usize,
+    port: usize,
+    value: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct VerifyGraphResponse {
+    success: bool,
+    results: Vec<VerifyGraphExampleResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preamble: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct VerifyGraphExampleResult {
+    name: String,
+    passed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
 // Shared application state
 #[derive(Clone)]
 struct AppState {
@@ -370,6 +418,7 @@ async fn main() {
         .route("/api/export_typst", post(export_typst_handler))
         .route("/api/verify", post(verify_handler))
         .route("/api/check_sat", post(check_sat_handler))
+        .route("/api/verify_graph", post(verify_graph_handler))
         .route("/api/operations", get(operations_handler))
         .route("/api/templates", get(templates_handler))
         .route("/api/palette", get(palette_handler))
@@ -2134,4 +2183,974 @@ async fn check_sat_handler(
 
 async fn health_handler() -> &'static str {
     "OK"
+}
+
+fn verify_graph_core(req: VerifyGraphRequest) -> VerifyGraphResponse {
+    use kleis::evaluator::Evaluator;
+    use kleis::kleis_parser::parse_kleis_program_with_file;
+
+    let theory_path =
+        std::path::PathBuf::from("std_template_lib").join(format!("{}.kleis", req.domain));
+
+    if !theory_path.exists() {
+        return VerifyGraphResponse {
+            success: false,
+            results: vec![],
+            error: Some(format!(
+                "No companion theory file: {}",
+                theory_path.display()
+            )),
+            preamble: None,
+        };
+    }
+
+    let theory_source = match std::fs::read_to_string(&theory_path) {
+        Ok(s) => s,
+        Err(e) => {
+            return VerifyGraphResponse {
+                success: false,
+                results: vec![],
+                error: Some(format!("Failed to read theory: {}", e)),
+                preamble: None,
+            };
+        }
+    };
+
+    let preamble = build_graph_preamble(&req, &theory_source);
+
+    let full_source = format!("{}{}", preamble, theory_source);
+    let preamble_copy = preamble.clone();
+
+    let program = match parse_kleis_program_with_file(
+        &full_source,
+        theory_path.to_string_lossy().to_string(),
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            return VerifyGraphResponse {
+                success: false,
+                results: vec![],
+                error: Some(format!("Parse error: {}", e)),
+                preamble: Some(preamble_copy),
+            };
+        }
+    };
+
+    let mut evaluator = Evaluator::new();
+    evaluator.load_program(&program);
+    let example_results = evaluator.run_all_examples(&program);
+
+    let results: Vec<VerifyGraphExampleResult> = example_results
+        .iter()
+        .map(|r| VerifyGraphExampleResult {
+            name: r.name.clone(),
+            passed: r.passed,
+            error: r.error.clone(),
+        })
+        .collect();
+
+    let all_passed = results.iter().all(|r| r.passed);
+    VerifyGraphResponse {
+        success: all_passed,
+        results,
+        error: None,
+        preamble: Some(preamble_copy),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Domain-agnostic graph preamble generator
+// ---------------------------------------------------------------------------
+// The server knows NOTHING about Petri nets, bond graphs, or any domain.
+// It emits generic graph data; the companion .kleis theory interprets it.
+// ---------------------------------------------------------------------------
+
+fn build_graph_preamble(req: &VerifyGraphRequest, theory_source: &str) -> String {
+    let nc = req.components.len();
+    let nn = req.incidence.v;
+
+    // Assign stable integer codes to each unique component_type string
+    let mut type_map: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    let mut next_code: usize = 1;
+    for comp in &req.components {
+        let ct = comp
+            .component_type
+            .as_deref()
+            .unwrap_or("Unknown")
+            .to_string();
+        if !type_map.contains_key(&ct) {
+            type_map.insert(ct, next_code);
+            next_code += 1;
+        }
+    }
+
+    // Scan theory for TYPE_X references and assign unused codes to absent types.
+    // This ensures every TYPE constant the theory references gets a concrete value
+    // (code 0 = "absent type" won't match any component since codes start at 1).
+    for cap in theory_source.split("TYPE_").skip(1) {
+        let name: String = cap
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if !name.is_empty() && !type_map.contains_key(&name) {
+            type_map.insert(name, next_code);
+            next_code += 1;
+        }
+    }
+
+    // Build component-level incidence matrix from port-level entries
+    let port_to_comp = |port_idx: usize| -> Option<usize> {
+        req.port_labels
+            .get(port_idx)
+            .and_then(|label| label.split(':').next())
+            .and_then(|ci_str| ci_str.parse::<usize>().ok())
+    };
+
+    // inc[net][comp] = signed value (aggregated across ports)
+    let mut inc: std::collections::BTreeMap<(usize, usize), i64> =
+        std::collections::BTreeMap::new();
+    for entry in &req.incidence.entries {
+        if let Some(ci) = port_to_comp(entry.port) {
+            *inc.entry((entry.net, ci)).or_insert(0) += entry.value;
+        }
+    }
+
+    let mut preamble = String::new();
+
+    // -- Operation declarations
+    preamble.push_str("// Graph primitives — auto-generated, domain-agnostic\n");
+    preamble.push_str("operation graph_nc : ℤ\n");
+    preamble.push_str("operation graph_nn : ℤ\n");
+    preamble.push_str("operation graph_ctype : ℤ → ℤ\n");
+    preamble.push_str("operation graph_param : ℤ × ℤ → ℤ\n");
+    preamble.push_str("operation graph_inc : ℤ × ℤ → ℤ\n");
+    preamble.push_str("\n");
+
+    // -- Type code constants (one per unique component_type)
+    preamble.push_str("// Type codes — theory uses these to identify component roles\n");
+    for (name, &code) in &type_map {
+        let safe_name = name.replace(' ', "_");
+        preamble.push_str(&format!("operation TYPE_{safe_name} : ℤ\n"));
+    }
+    preamble.push_str("\n");
+
+    // -- GraphData structure
+    preamble.push_str("structure GraphData {\n");
+    preamble.push_str(&format!("    axiom nc_val: graph_nc = {nc}\n"));
+    preamble.push_str(&format!("    axiom nn_val: graph_nn = {nn}\n"));
+
+    // Type code values
+    for (name, &code) in &type_map {
+        let safe_name = name.replace(' ', "_");
+        preamble.push_str(&format!(
+            "    axiom type_{safe_name}: TYPE_{safe_name} = {code}\n"
+        ));
+    }
+
+    // Component types
+    for (ci, comp) in req.components.iter().enumerate() {
+        let ct = comp
+            .component_type
+            .as_deref()
+            .unwrap_or("Unknown")
+            .to_string();
+        let code = type_map.get(&ct).copied().unwrap_or(0);
+        preamble.push_str(&format!(
+            "    axiom ctype_{ci}: graph_ctype({ci}) = {code}\n"
+        ));
+    }
+
+    // Component parameters (all params flattened as positional integers)
+    for (ci, comp) in req.components.iter().enumerate() {
+        if let Some(ref params) = comp.params {
+            for (pi, (_key, val)) in params.iter().enumerate() {
+                let v = val.as_i64().unwrap_or(0);
+                preamble.push_str(&format!(
+                    "    axiom param_{ci}_{pi}: graph_param({ci}, {pi}) = {v}\n"
+                ));
+            }
+        }
+    }
+
+    // Closed-world: components outside range have type 0
+    preamble.push_str(&format!(
+        "    axiom ctype_closed: ∀(c : ℤ). (c < 0 ∨ c ≥ {nc}) → graph_ctype(c) = 0\n"
+    ));
+
+    // Distinctness: all TYPE codes are different and > 0.
+    // Prevents Z3 from equating an undefined TYPE_X with a defined one.
+    let codes: Vec<(&String, &usize)> = type_map.iter().collect();
+    for i in 0..codes.len() {
+        for j in (i + 1)..codes.len() {
+            let a = codes[i].0.replace(' ', "_");
+            let b = codes[j].0.replace(' ', "_");
+            preamble.push_str(&format!(
+                "    axiom distinct_{a}_{b}: ¬(TYPE_{a} = TYPE_{b})\n"
+            ));
+        }
+    }
+    // All type codes are positive (0 = "no such type")
+    for (name, _) in &type_map {
+        let safe_name = name.replace(' ', "_");
+        preamble.push_str(&format!(
+            "    axiom pos_{safe_name}: TYPE_{safe_name} > 0\n"
+        ));
+    }
+
+    // Component-level incidence matrix
+    for (&(net, comp), &val) in &inc {
+        if val != 0 {
+            preamble.push_str(&format!(
+                "    axiom inc_{net}_{comp}: graph_inc({net}, {comp}) = {val}\n"
+            ));
+        }
+    }
+
+    // Closed-world for incidence: anything outside explicit entries is 0
+    if nc > 0 && nn > 0 {
+        let mut inc_disjuncts: Vec<String> = Vec::new();
+        for &(net, comp) in inc.keys() {
+            inc_disjuncts.push(format!("(n = {net} ∧ c = {comp})"));
+        }
+        if inc_disjuncts.is_empty() {
+            preamble.push_str("    axiom inc_closed: ∀(n : ℤ). ∀(c : ℤ). graph_inc(n, c) = 0\n");
+        } else {
+            preamble.push_str(&format!(
+                "    axiom inc_closed: ∀(n : ℤ). ∀(c : ℤ). ¬({}) → graph_inc(n, c) = 0\n",
+                inc_disjuncts.join(" ∨ ")
+            ));
+        }
+    } else {
+        preamble.push_str("    axiom inc_closed: ∀(n : ℤ). ∀(c : ℤ). graph_inc(n, c) = 0\n");
+    }
+
+    // Closed-world for params: anything outside explicit entries is 0
+    let mut param_disjuncts: Vec<String> = Vec::new();
+    for (ci, comp) in req.components.iter().enumerate() {
+        if let Some(ref params) = comp.params {
+            for (pi, _) in params.iter().enumerate() {
+                param_disjuncts.push(format!("(c = {ci} ∧ p = {pi})"));
+            }
+        }
+    }
+    if param_disjuncts.is_empty() {
+        preamble.push_str("    axiom param_closed: ∀(c : ℤ). ∀(p : ℤ). graph_param(c, p) = 0\n");
+    } else {
+        preamble.push_str(&format!(
+            "    axiom param_closed: ∀(c : ℤ). ∀(p : ℤ). ¬({}) → graph_param(c, p) = 0\n",
+            param_disjuncts.join(" ∨ ")
+        ));
+    }
+
+    preamble.push_str("}\n\n");
+    preamble
+}
+
+async fn verify_graph_handler(
+    State(_state): State<Arc<AppState>>,
+    Json(req): Json<VerifyGraphRequest>,
+) -> impl IntoResponse {
+    let result = tokio::task::spawn_blocking(move || verify_graph_core(req)).await;
+    match result {
+        Ok(resp) => Json(resp),
+        Err(e) => Json(VerifyGraphResponse {
+            success: false,
+            results: vec![],
+            error: Some(format!("Task panic: {}", e)),
+            preamble: None,
+        }),
+    }
+}
+
+// =============================================================================
+// Tests for verify_graph
+// =============================================================================
+
+#[cfg(test)]
+mod verify_graph_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn comp(
+        comp_type: &str,
+        component_type: &str,
+        params: Vec<(&str, serde_json::Value)>,
+    ) -> VerifyGraphComponent {
+        let p: HashMap<String, serde_json::Value> = params
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+        VerifyGraphComponent {
+            comp_type: comp_type.to_string(),
+            component_type: Some(component_type.to_string()),
+            params: if p.is_empty() { None } else { Some(p) },
+        }
+    }
+
+    fn entry(net: usize, port: usize, value: i64) -> VerifyGraphEntry {
+        VerifyGraphEntry { net, port, value }
+    }
+
+    // =========================================================================
+    // Linear workflow:  Source(1) → T → Place(0) → T → Sink(0)
+    //
+    //  c0=SourcePlace  c1=Transition  c2=Place  c3=Transition  c4=SinkPlace
+    //  Ports (4 per component): c0:0..3  c1:4..7  c2:8..11  c3:12..15  c4:16..19
+    //  Nets:
+    //    n0: c0(+1) → c1(-1)   n1: c1(+1) → c2(-1)
+    //    n2: c2(+1) → c3(-1)   n3: c3(+1) → c4(-1)
+    // =========================================================================
+    fn petri_linear_workflow() -> VerifyGraphRequest {
+        VerifyGraphRequest {
+            domain: "petri_net".to_string(),
+            components: vec![
+                comp(
+                    "pn_source_place",
+                    "SourcePlace",
+                    vec![("tokens", serde_json::json!(1))],
+                ),
+                comp("pn_transition", "Transition", vec![]),
+                comp("pn_place", "Place", vec![("tokens", serde_json::json!(0))]),
+                comp("pn_transition", "Transition", vec![]),
+                comp(
+                    "pn_sink_place",
+                    "SinkPlace",
+                    vec![("tokens", serde_json::json!(0))],
+                ),
+            ],
+            incidence: VerifyGraphIncidence {
+                entries: vec![
+                    entry(0, 1, 1),
+                    entry(0, 6, -1),
+                    entry(1, 5, 1),
+                    entry(1, 10, -1),
+                    entry(2, 9, 1),
+                    entry(2, 14, -1),
+                    entry(3, 13, 1),
+                    entry(3, 18, -1),
+                ],
+                v: 4,
+                p: 20,
+            },
+            port_labels: (0..20)
+                .map(|i| format!("{}:{}", i / 4, ["top", "right", "bottom", "left"][i % 4]))
+                .collect(),
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Preamble structure tests (domain-agnostic)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn preamble_emits_generic_counts() {
+        let preamble = build_graph_preamble(&petri_linear_workflow(), "");
+        assert!(
+            preamble.contains("graph_nc = 5"),
+            "expected 5 components:\n{preamble}"
+        );
+        assert!(
+            preamble.contains("graph_nn = 4"),
+            "expected 4 nets:\n{preamble}"
+        );
+    }
+
+    #[test]
+    fn preamble_emits_type_codes() {
+        let preamble = build_graph_preamble(&petri_linear_workflow(), "");
+        assert!(
+            preamble.contains("TYPE_SourcePlace"),
+            "missing TYPE_SourcePlace"
+        );
+        assert!(
+            preamble.contains("TYPE_Transition"),
+            "missing TYPE_Transition"
+        );
+        assert!(preamble.contains("TYPE_Place"), "missing TYPE_Place");
+        assert!(
+            preamble.contains("TYPE_SinkPlace"),
+            "missing TYPE_SinkPlace"
+        );
+    }
+
+    #[test]
+    fn preamble_emits_per_component_type() {
+        let preamble = build_graph_preamble(&petri_linear_workflow(), "");
+        assert!(preamble.contains("graph_ctype(0)"), "missing ctype for c0");
+        assert!(preamble.contains("graph_ctype(4)"), "missing ctype for c4");
+    }
+
+    #[test]
+    fn preamble_emits_params() {
+        let preamble = build_graph_preamble(&petri_linear_workflow(), "");
+        assert!(
+            preamble.contains("graph_param(0, 0) = 1"),
+            "source place should have param 0 = 1:\n{preamble}"
+        );
+        assert!(
+            preamble.contains("graph_param(2, 0) = 0"),
+            "middle place should have param 0 = 0:\n{preamble}"
+        );
+    }
+
+    #[test]
+    fn preamble_emits_component_level_incidence() {
+        let preamble = build_graph_preamble(&petri_linear_workflow(), "");
+        assert!(
+            preamble.contains("graph_inc(0, 0) = 1"),
+            "c0 source of net 0"
+        );
+        assert!(
+            preamble.contains("graph_inc(0, 1) = -1"),
+            "c1 target of net 0"
+        );
+        assert!(
+            preamble.contains("graph_inc(1, 1) = 1"),
+            "c1 source of net 1"
+        );
+        assert!(
+            preamble.contains("graph_inc(1, 2) = -1"),
+            "c2 target of net 1"
+        );
+    }
+
+    #[test]
+    fn preamble_has_no_domain_specific_operations() {
+        let preamble = build_graph_preamble(&petri_linear_workflow(), "");
+        assert!(
+            !preamble.contains("graph_iw"),
+            "no domain-specific graph_iw"
+        );
+        assert!(
+            !preamble.contains("graph_ow"),
+            "no domain-specific graph_ow"
+        );
+        assert!(
+            !preamble.contains("graph_m0"),
+            "no domain-specific graph_m0"
+        );
+        assert!(
+            !preamble.contains("valid_state"),
+            "no domain-specific valid_state"
+        );
+        assert!(
+            !preamble.contains("can_fire"),
+            "no domain-specific can_fire"
+        );
+    }
+
+    #[test]
+    fn preamble_closed_world_axiom() {
+        let preamble = build_graph_preamble(&petri_linear_workflow(), "");
+        assert!(
+            preamble.contains("ctype_closed"),
+            "missing closed-world axiom"
+        );
+    }
+
+    #[test]
+    fn preamble_no_params_when_none() {
+        let req = VerifyGraphRequest {
+            domain: "petri_net".to_string(),
+            components: vec![VerifyGraphComponent {
+                comp_type: "pn_place".to_string(),
+                component_type: Some("Place".to_string()),
+                params: None,
+            }],
+            incidence: VerifyGraphIncidence {
+                entries: vec![],
+                v: 0,
+                p: 4,
+            },
+            port_labels: (0..4)
+                .map(|i| format!("0:{}", ["top", "right", "bottom", "left"][i]))
+                .collect(),
+        };
+        let preamble = build_graph_preamble(&req, "");
+        assert!(preamble.contains("graph_nc = 1"));
+        assert!(
+            !preamble.contains("graph_param(0"),
+            "no params emitted when None"
+        );
+    }
+
+    #[test]
+    fn preamble_empty_graph() {
+        let req = VerifyGraphRequest {
+            domain: "petri_net".to_string(),
+            components: vec![],
+            incidence: VerifyGraphIncidence {
+                entries: vec![],
+                v: 0,
+                p: 0,
+            },
+            port_labels: vec![],
+        };
+        let preamble = build_graph_preamble(&req, "");
+        assert!(preamble.contains("graph_nc = 0"));
+        assert!(preamble.contains("graph_nn = 0"));
+    }
+
+    #[test]
+    fn preamble_electronics_params() {
+        let req = VerifyGraphRequest {
+            domain: "electronics".to_string(),
+            components: vec![
+                comp("resistor", "Passive", vec![("R", serde_json::json!(1000))]),
+                comp("dc_voltage", "Source", vec![("V", serde_json::json!(5))]),
+            ],
+            incidence: VerifyGraphIncidence {
+                entries: vec![entry(0, 1, 1), entry(0, 3, -1)],
+                v: 1,
+                p: 4,
+            },
+            port_labels: vec![
+                "0:left".into(),
+                "0:right".into(),
+                "1:pos".into(),
+                "1:neg".into(),
+            ],
+        };
+        let preamble = build_graph_preamble(&req, "");
+        assert!(
+            preamble.contains("graph_param(0, 0) = 1000"),
+            "resistor R=1000"
+        );
+        assert!(preamble.contains("graph_param(1, 0) = 5"), "voltage V=5");
+        assert!(preamble.contains("TYPE_Passive"));
+        assert!(preamble.contains("TYPE_Source"));
+    }
+
+    // -------------------------------------------------------------------------
+    // Z3 verification tests (theory + preamble → examples checked)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn petri_linear_workflow_passes_z3() {
+        let resp = verify_graph_core(petri_linear_workflow());
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        assert!(
+            !resp.results.is_empty(),
+            "expected at least one example result"
+        );
+        for r in &resp.results {
+            assert!(r.passed, "example '{}' failed: {:?}", r.name, r.error);
+        }
+        assert!(resp.success);
+    }
+
+    #[test]
+    fn petri_no_tokens_fails_initial_marking() {
+        let mut req = petri_linear_workflow();
+        req.components[0] = comp(
+            "pn_source_place",
+            "SourcePlace",
+            vec![("tokens", serde_json::json!(0))],
+        );
+        let resp = verify_graph_core(req);
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let initial = resp
+            .results
+            .iter()
+            .find(|r| r.name.contains("INITIAL MARKING"));
+        assert!(initial.is_some(), "expected INITIAL MARKING example");
+        assert!(!initial.unwrap().passed, "should fail with all 0 tokens");
+        assert!(!resp.success);
+    }
+
+    #[test]
+    fn petri_multiple_tokens_passes() {
+        let mut req = petri_linear_workflow();
+        req.components[0] = comp(
+            "pn_source_place",
+            "SourcePlace",
+            vec![("tokens", serde_json::json!(5))],
+        );
+        let resp = verify_graph_core(req);
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        assert!(resp.success, "should pass with 5 tokens");
+        let preamble = resp.preamble.unwrap();
+        assert!(
+            preamble.contains("graph_param(0, 0) = 5"),
+            "preamble should reflect 5 tokens"
+        );
+    }
+
+    #[test]
+    fn petri_no_sink_fails_sink_exists() {
+        let req = VerifyGraphRequest {
+            domain: "petri_net".to_string(),
+            components: vec![
+                comp(
+                    "pn_source_place",
+                    "SourcePlace",
+                    vec![("tokens", serde_json::json!(1))],
+                ),
+                comp("pn_transition", "Transition", vec![]),
+                comp("pn_place", "Place", vec![("tokens", serde_json::json!(0))]),
+            ],
+            incidence: VerifyGraphIncidence {
+                entries: vec![
+                    entry(0, 1, 1),
+                    entry(0, 6, -1),
+                    entry(1, 5, 1),
+                    entry(1, 10, -1),
+                ],
+                v: 2,
+                p: 12,
+            },
+            port_labels: (0..12)
+                .map(|i| format!("{}:{}", i / 4, ["top", "right", "bottom", "left"][i % 4]))
+                .collect(),
+        };
+        let resp = verify_graph_core(req);
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let sink_check = resp.results.iter().find(|r| r.name.contains("SINK EXISTS"));
+        assert!(sink_check.is_some(), "expected SINK EXISTS example");
+        assert!(
+            !sink_check.unwrap().passed,
+            "SINK EXISTS should fail when no SinkPlace"
+        );
+    }
+
+    #[test]
+    fn petri_non_bipartite_fails() {
+        let req = VerifyGraphRequest {
+            domain: "petri_net".to_string(),
+            components: vec![
+                comp(
+                    "pn_source_place",
+                    "SourcePlace",
+                    vec![("tokens", serde_json::json!(1))],
+                ),
+                comp(
+                    "pn_sink_place",
+                    "SinkPlace",
+                    vec![("tokens", serde_json::json!(0))],
+                ),
+            ],
+            incidence: VerifyGraphIncidence {
+                entries: vec![entry(0, 1, 1), entry(0, 5, -1)],
+                v: 1,
+                p: 8,
+            },
+            port_labels: (0..8)
+                .map(|i| format!("{}:{}", i / 4, ["top", "right", "bottom", "left"][i % 4]))
+                .collect(),
+        };
+        let resp = verify_graph_core(req);
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        let bipartite = resp.results.iter().find(|r| r.name.contains("BIPARTITE"));
+        assert!(bipartite.is_some(), "expected BIPARTITE example");
+        assert!(
+            !bipartite.unwrap().passed,
+            "BIPARTITE should fail with place-to-place arc"
+        );
+    }
+
+    #[test]
+    fn petri_empty_graph_fails() {
+        let req = VerifyGraphRequest {
+            domain: "petri_net".to_string(),
+            components: vec![],
+            incidence: VerifyGraphIncidence {
+                entries: vec![],
+                v: 0,
+                p: 0,
+            },
+            port_labels: vec![],
+        };
+        let resp = verify_graph_core(req);
+        assert!(
+            resp.error.is_none(),
+            "empty graph should still parse: {:?}",
+            resp.error
+        );
+        assert!(!resp.success, "empty graph should fail verification");
+    }
+
+    #[test]
+    fn petri_self_loop_passes() {
+        let req = VerifyGraphRequest {
+            domain: "petri_net".to_string(),
+            components: vec![
+                comp("pn_place", "Place", vec![("tokens", serde_json::json!(1))]),
+                comp("pn_transition", "Transition", vec![]),
+            ],
+            incidence: VerifyGraphIncidence {
+                entries: vec![
+                    entry(0, 1, 1),
+                    entry(0, 6, -1),
+                    entry(1, 5, 1),
+                    entry(1, 3, -1),
+                ],
+                v: 2,
+                p: 8,
+            },
+            port_labels: (0..8)
+                .map(|i| format!("{}:{}", i / 4, ["top", "right", "bottom", "left"][i % 4]))
+                .collect(),
+        };
+        let preamble = build_graph_preamble(&req, "");
+        assert!(
+            preamble.contains("graph_inc(0, 0) = 1"),
+            "c0 source of net 0"
+        );
+        assert!(
+            preamble.contains("graph_inc(0, 1) = -1"),
+            "c1 target of net 0"
+        );
+        assert!(
+            preamble.contains("graph_inc(1, 1) = 1"),
+            "c1 source of net 1"
+        );
+        assert!(
+            preamble.contains("graph_inc(1, 0) = -1"),
+            "c0 target of net 1"
+        );
+    }
+
+    #[test]
+    fn petri_fork_topology() {
+        let req = VerifyGraphRequest {
+            domain: "petri_net".to_string(),
+            components: vec![
+                comp(
+                    "pn_source_place",
+                    "SourcePlace",
+                    vec![("tokens", serde_json::json!(1))],
+                ),
+                comp("pn_transition", "Transition", vec![]),
+                comp("pn_place", "Place", vec![("tokens", serde_json::json!(0))]),
+                comp("pn_place", "Place", vec![("tokens", serde_json::json!(0))]),
+            ],
+            incidence: VerifyGraphIncidence {
+                entries: vec![
+                    entry(0, 1, 1),
+                    entry(0, 6, -1),
+                    entry(1, 5, 1),
+                    entry(1, 10, -1),
+                    entry(2, 7, 1),
+                    entry(2, 14, -1),
+                ],
+                v: 3,
+                p: 16,
+            },
+            port_labels: (0..16)
+                .map(|i| format!("{}:{}", i / 4, ["top", "right", "bottom", "left"][i % 4]))
+                .collect(),
+        };
+        let preamble = build_graph_preamble(&req, "");
+        assert!(preamble.contains("graph_nc = 4"), "4 components");
+        assert!(preamble.contains("graph_nn = 3"), "3 nets");
+        assert!(
+            preamble.contains("graph_inc(1, 1) = 1"),
+            "c1 source of net 1"
+        );
+        assert!(
+            preamble.contains("graph_inc(1, 2) = -1"),
+            "c2 target of net 1"
+        );
+        assert!(
+            preamble.contains("graph_inc(2, 1) = 1"),
+            "c1 source of net 2"
+        );
+        assert!(
+            preamble.contains("graph_inc(2, 3) = -1"),
+            "c3 target of net 2"
+        );
+    }
+
+    #[test]
+    fn petri_join_topology() {
+        let req = VerifyGraphRequest {
+            domain: "petri_net".to_string(),
+            components: vec![
+                comp(
+                    "pn_source_place",
+                    "SourcePlace",
+                    vec![("tokens", serde_json::json!(1))],
+                ),
+                comp(
+                    "pn_source_place",
+                    "SourcePlace",
+                    vec![("tokens", serde_json::json!(1))],
+                ),
+                comp("pn_transition", "Transition", vec![]),
+                comp(
+                    "pn_sink_place",
+                    "SinkPlace",
+                    vec![("tokens", serde_json::json!(0))],
+                ),
+            ],
+            incidence: VerifyGraphIncidence {
+                entries: vec![
+                    entry(0, 1, 1),
+                    entry(0, 10, -1),
+                    entry(1, 5, 1),
+                    entry(1, 8, -1),
+                    entry(2, 9, 1),
+                    entry(2, 14, -1),
+                ],
+                v: 3,
+                p: 16,
+            },
+            port_labels: (0..16)
+                .map(|i| format!("{}:{}", i / 4, ["top", "right", "bottom", "left"][i % 4]))
+                .collect(),
+        };
+        let resp = verify_graph_core(req);
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        for r in &resp.results {
+            assert!(r.passed, "example '{}' failed: {:?}", r.name, r.error);
+        }
+        assert!(resp.success, "join net with tokens should pass");
+    }
+
+    // -------------------------------------------------------------------------
+    // Missing / no-theory domains
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn missing_theory_returns_error() {
+        let req = VerifyGraphRequest {
+            domain: "nonexistent_domain".to_string(),
+            components: vec![],
+            incidence: VerifyGraphIncidence {
+                entries: vec![],
+                v: 0,
+                p: 0,
+            },
+            port_labels: vec![],
+        };
+        let resp = verify_graph_core(req);
+        assert!(!resp.success);
+        assert!(resp.error.is_some());
+        assert!(resp.error.unwrap().contains("No companion theory file"));
+    }
+
+    #[test]
+    fn electronics_no_theory() {
+        let req = VerifyGraphRequest {
+            domain: "electronics".to_string(),
+            components: vec![
+                comp("resistor", "Passive", vec![("R", serde_json::json!(1000))]),
+                comp("dc_voltage", "Source", vec![("V", serde_json::json!(5))]),
+            ],
+            incidence: VerifyGraphIncidence {
+                entries: vec![entry(0, 1, 1), entry(0, 3, -1)],
+                v: 1,
+                p: 4,
+            },
+            port_labels: vec![
+                "0:left".into(),
+                "0:right".into(),
+                "1:pos".into(),
+                "1:neg".into(),
+            ],
+        };
+        let resp = verify_graph_core(req);
+        assert!(!resp.success);
+        assert!(resp.error.is_some());
+        assert!(resp.error.unwrap().contains("No companion theory file"));
+    }
+
+    #[test]
+    fn bond_graph_no_theory() {
+        let req = VerifyGraphRequest {
+            domain: "bond_graph".to_string(),
+            components: vec![
+                comp("bg_effort_source", "Source", vec![]),
+                comp("bg_1junction", "Junction", vec![]),
+            ],
+            incidence: VerifyGraphIncidence {
+                entries: vec![entry(0, 0, 1), entry(0, 1, -1)],
+                v: 1,
+                p: 2,
+            },
+            port_labels: vec!["0:port".into(), "1:port".into()],
+        };
+        let resp = verify_graph_core(req);
+        assert!(!resp.success);
+        assert!(resp.error.is_some());
+        assert!(resp.error.unwrap().contains("No companion theory file"));
+    }
+
+    // -------------------------------------------------------------------------
+    // Mutex net: structural checks via Z3
+    // -------------------------------------------------------------------------
+    #[test]
+    fn petri_mutex_passes_structural() {
+        let req = VerifyGraphRequest {
+            domain: "petri_net".to_string(),
+            components: vec![
+                comp(
+                    "pn_source_place",
+                    "SourcePlace",
+                    vec![("tokens", serde_json::json!(1))],
+                ),
+                comp("pn_place", "Place", vec![("tokens", serde_json::json!(0))]),
+                comp(
+                    "pn_source_place",
+                    "SourcePlace",
+                    vec![("tokens", serde_json::json!(1))],
+                ),
+                comp("pn_place", "Place", vec![("tokens", serde_json::json!(0))]),
+                comp("pn_place", "Place", vec![("tokens", serde_json::json!(1))]),
+                comp("pn_transition", "Transition", vec![]),
+                comp("pn_transition", "Transition", vec![]),
+                comp("pn_transition", "Transition", vec![]),
+                comp("pn_transition", "Transition", vec![]),
+                comp(
+                    "pn_sink_place",
+                    "SinkPlace",
+                    vec![("tokens", serde_json::json!(0))],
+                ),
+            ],
+            incidence: VerifyGraphIncidence {
+                entries: vec![
+                    entry(0, 1, 1),
+                    entry(0, 22, -1),
+                    entry(1, 17, 1),
+                    entry(1, 23, -1),
+                    entry(2, 21, 1),
+                    entry(2, 6, -1),
+                    entry(3, 5, 1),
+                    entry(3, 26, -1),
+                    entry(4, 25, 1),
+                    entry(4, 3, -1),
+                    entry(5, 27, 1),
+                    entry(5, 19, -1),
+                    entry(6, 9, 1),
+                    entry(6, 30, -1),
+                    entry(7, 18, 1),
+                    entry(7, 31, -1),
+                    entry(8, 29, 1),
+                    entry(8, 14, -1),
+                    entry(9, 13, 1),
+                    entry(9, 34, -1),
+                    entry(10, 33, 1),
+                    entry(10, 11, -1),
+                    entry(11, 35, 1),
+                    entry(11, 16, -1),
+                ],
+                v: 12,
+                p: 40,
+            },
+            port_labels: (0..40)
+                .map(|i| format!("{}:{}", i / 4, ["top", "right", "bottom", "left"][i % 4]))
+                .collect(),
+        };
+
+        let preamble = build_graph_preamble(&req, "");
+        assert!(preamble.contains("graph_nc = 10"), "10 components");
+        assert!(preamble.contains("graph_nn = 12"), "12 nets");
+
+        let resp = verify_graph_core(req);
+        assert!(resp.error.is_none(), "unexpected error: {:?}", resp.error);
+        for r in &resp.results {
+            assert!(r.passed, "example '{}' failed: {:?}", r.name, r.error);
+        }
+        assert!(resp.success);
+    }
 }

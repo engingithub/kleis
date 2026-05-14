@@ -1,0 +1,86 @@
+// =============================================================================
+// Graph Theory Verification Theory
+// =============================================================================
+//
+// Companion theory for graph_theory.kleist — loaded by /api/verify_graph.
+//
+// The server provides ONLY generic graph primitives (domain-agnostic):
+//   graph_nc, graph_nn          — node/edge counts
+//   graph_ctype(c)              — integer type code for component c
+//   graph_inc(net, comp)        — signed incidence (+1 or -1 = connected)
+//   TYPE_Node                   — type code for graph nodes
+//
+// This theory verifies structural graph properties.
+// Classic test case: Euler's Seven Bridges of Königsberg (1736).
+// =============================================================================
+
+define is_node(c) = graph_ctype(c) = TYPE_Node
+
+// A node is incident to an edge if graph_inc is non-zero
+define incident(n, c) = ¬(graph_inc(n, c) = 0)
+
+// =============================================================================
+// Structural verification — checked by Z3
+// =============================================================================
+
+example "NO ISOLATED NODES: every node has at least one edge" {
+    assert(∀(c : ℤ). (c ≥ 0 ∧ c < graph_nc ∧ is_node(c)) →
+        ∃(n : ℤ). n ≥ 0 ∧ n < graph_nn ∧ incident(n, c))
+}
+
+example "EACH EDGE BINARY: every edge connects exactly two nodes" {
+    assert(∀(n : ℤ). (n ≥ 0 ∧ n < graph_nn) →
+        ∃(c1 : ℤ). ∃(c2 : ℤ).
+            c1 ≥ 0 ∧ c1 < graph_nc ∧
+            c2 ≥ 0 ∧ c2 < graph_nc ∧
+            ¬(c1 = c2) ∧
+            incident(n, c1) ∧ incident(n, c2) ∧
+            ∀(c3 : ℤ). (c3 ≥ 0 ∧ c3 < graph_nc ∧ incident(n, c3)) →
+                (c3 = c1 ∨ c3 = c2))
+}
+
+example "NO SELF-LOOPS: no edge connects a node to itself" {
+    assert(∀(n : ℤ). (n ≥ 0 ∧ n < graph_nn) →
+        ∃(c1 : ℤ). ∃(c2 : ℤ).
+            c1 ≥ 0 ∧ c1 < graph_nc ∧
+            c2 ≥ 0 ∧ c2 < graph_nc ∧
+            ¬(c1 = c2) ∧
+            incident(n, c1) ∧ incident(n, c2))
+}
+
+example "SIMPLE GRAPH: no parallel edges between any pair of nodes" {
+    assert(∀(n1 : ℤ). ∀(n2 : ℤ).
+        (n1 ≥ 0 ∧ n1 < graph_nn ∧ n2 ≥ 0 ∧ n2 < graph_nn ∧ ¬(n1 = n2)) →
+        ∃(c : ℤ). c ≥ 0 ∧ c < graph_nc ∧
+            ((incident(n1, c) ∧ ¬(incident(n2, c))) ∨
+             (¬(incident(n1, c)) ∧ incident(n2, c))))
+}
+
+example "WELL-CONNECTED: every node has at least 2 edges" {
+    assert(∀(c : ℤ). (c ≥ 0 ∧ c < graph_nc ∧ is_node(c)) →
+        ∃(n1 : ℤ). ∃(n2 : ℤ).
+            n1 ≥ 0 ∧ n1 < graph_nn ∧
+            n2 ≥ 0 ∧ n2 < graph_nn ∧
+            ¬(n1 = n2) ∧
+            incident(n1, c) ∧ incident(n2, c))
+}
+
+// =============================================================================
+// NOTE: Eulerian path/circuit verification
+// =============================================================================
+//
+// Euler's theorem (1736): A connected graph has an Eulerian circuit iff every
+// node has even degree. It has an Eulerian path iff exactly 0 or 2 nodes have
+// odd degree. For Königsberg, all 4 nodes have odd degree → no Eulerian path.
+//
+// Expressing degree parity requires bounded aggregation (counting incident
+// edges mod 2), which is a planned Kleis feature. When available, add:
+//
+//   example "EULERIAN CIRCUIT: all nodes have even degree" {
+//       assert(∀(c : ℤ). is_node(c) → even(degree(c)))
+//   }
+//
+// Until then, the SIMPLE GRAPH check catches Königsberg's key structural
+// property: it's a multigraph (parallel edges), which Euler identified as
+// essential to the impossibility proof.
+// =============================================================================

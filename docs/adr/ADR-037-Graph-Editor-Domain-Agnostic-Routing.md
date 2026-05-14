@@ -1,10 +1,10 @@
-# ADR-037: Graph Editor with Domain-Agnostic Routing
+# ADR-037: Graph Editor with Domain-Agnostic Routing and Verification
 
-**Status:** Accepted & Implemented (Phase 1)  
-**Date:** 2026-04-27  
-**Relates to:** ADR-005 (Visual Authoring), ADR-023 (Template Externalization),
-ADR-035 (Multi-Domain Template Compiler), ADR-036 (Multi-Domain Template
-Generality)
+**Status:** Accepted & Implemented (Phases 1–5)
+**Date:** 2026-04-27 (original), 2026-05-14 (updated)
+**Relates to:** ADR-005 (Visual Authoring), ADR-022 (Z3 Integration), ADR-023
+(Template Externalization), ADR-035 (Multi-Domain Template Compiler), ADR-036
+(Multi-Domain Template Generality)
 
 ## Context
 
@@ -85,7 +85,7 @@ nets), the signs carry physical meaning.
 ```
 graph(
   SparseMatrix(V, P, [net0, port0, val0, net1, port1, val1, ...]),
-  [component operations...],     // component types
+  [component operations...],     // component types with parameters
   [net labels...],               // net names
   [port labels...]               // "componentIdx:portName" per column
 )
@@ -166,61 +166,151 @@ mode. Domains using `direct` routing get straight-line connections (no
 waypoints). The `multi_port_strategy` field selects between `trunk_branch` and
 `star` (centroid) strategies.
 
-### 5. Future Domain Support Without JS Changes
+### 5. Parameterized Components
+
+Components can accept domain-specific parameters (e.g., resistance for a
+resistor, token count for a Petri net place). Parameters are declared in
+`.kleist` template metadata:
+
+```kleist
+@template pn_place {
+    params: "tokens:int:0"
+    componentType: "Place"
+}
+
+@template resistor {
+    params: "R:real:1000"
+    componentType: "Passive"
+}
+```
+
+Format: `"name:type:default"`, comma-separated for multiple params. The Graph
+Editor parses this metadata, initializes component state with defaults, and
+renders a property panel when a component is selected. Parameter values flow into
+the AST as operation arguments:
+
+```json
+{ "Operation": { "name": "resistor", "args": [{ "Const": "1000" }] } }
+```
+
+### 6. Domain-Agnostic Verification Architecture
+
+The VERIFY button triggers a two-stage verification pipeline:
+
+**Stage 1: Client-side structural checks (JavaScript)**
+
+Generic checks driven by `verify_*` metadata in the `__domain_` template:
+
+| Metadata Key | Check |
+|-------------|-------|
+| `verify_bipartite` | Every arc crosses two different component roles |
+| `verify_no_isolated` | No component lacks connections |
+| `verify_requires_type` | At least one component of each required type exists |
+| `verify_all_connected` | Graph is connected |
+| `verify_exactly_one` | Exactly one component of a given type |
+
+These checks are fast, run entirely in the browser, and provide immediate
+feedback. They use no domain-specific JavaScript logic — the check names map to
+generic graph analysis functions.
+
+**Stage 2: Z3-based deep verification (server-side)**
+
+If structural checks pass and `verify_theory` is defined in the domain config,
+the client POSTs to `POST /api/verify_graph` with graph data (components,
+incidence matrix, port labels, domain name).
+
+The server then:
+
+1. **Generates a domain-agnostic preamble** from the graph data
+2. **Loads the companion `.kleis` theory** file (`std_template_lib/{domain}.kleis`)
+3. **Concatenates** preamble + theory source and evaluates with Z3
+4. **Returns** per-example pass/fail results
+
+### 7. Domain-Agnostic Graph Preamble
+
+**Critical architectural constraint: `server.rs` contains zero domain-specific
+code.** The server does not know what a "place," "transition," "resistor," or
+"bond" is. It emits only generic graph primitives:
+
+```kleis
+// Counts
+operation graph_nc : ℤ          // number of components
+operation graph_nn : ℤ          // number of nets
+
+// Per-component type codes (integer-coded, auto-assigned)
+operation graph_ctype : ℤ → ℤ   // component index → type code
+operation graph_param : ℤ × ℤ → ℤ  // (component, param_index) → value
+
+// Component-level incidence matrix (aggregated from port-level)
+operation graph_inc : ℤ × ℤ → ℤ    // (net, component) → signed value
+
+// Type code constants (one per unique component_type string)
+operation TYPE_X : ℤ            // e.g., TYPE_Place, TYPE_Transition
+```
+
+The preamble emits a `GraphData` structure with:
+
+- **Component counts** and **type code assignments**
+- **Parameter values** (positional, from the component's `params` map)
+- **Component-level incidence** (port-level entries aggregated per component)
+- **Closed-world axioms** for `graph_ctype`, `graph_inc`, and `graph_param`
+  (preventing Z3 from inventing values for unconstrained inputs)
+- **Distinctness axioms** for all TYPE codes (preventing Z3 from equating
+  different component roles)
+
+**Theory scanning for absent types:** The preamble scans the companion theory
+text for `TYPE_X` references and assigns unused codes to any types the theory
+needs but the graph doesn't contain. This ensures every TYPE constant gets a
+concrete value. For absent types, the assigned code won't match any actual
+component (codes start at 1 for present types; absent types get higher codes
+that no component has). This is fully domain-agnostic — it's string scanning,
+not domain interpretation.
+
+### 8. Companion Theory Files
+
+Each domain's verification logic lives entirely in a companion `.kleis` file.
+The theory interprets the generic graph primitives in domain-specific terms.
+
+Example — `std_template_lib/petri_net.kleis`:
+
+```kleis
+// Domain interpretation of generic graph data
+define is_place(c) =
+    graph_ctype(c) = TYPE_Place ∨
+    graph_ctype(c) = TYPE_SourcePlace ∨
+    graph_ctype(c) = TYPE_SinkPlace
+
+define is_transition(c) = graph_ctype(c) = TYPE_Transition
+define tokens(c) = graph_param(c, 0)
+
+// Structural verification via Z3
+example "INITIAL MARKING: some component has tokens" {
+    assert(∃(c : ℤ). c ≥ 0 ∧ c < graph_nc ∧ is_place(c) ∧ tokens(c) ≥ 1)
+}
+
+example "BIPARTITE: every arc crosses place/transition boundary" {
+    assert(∀(n : ℤ). ∀(c1 : ℤ). ∀(c2 : ℤ).
+        (n ≥ 0 ∧ n < graph_nn ∧ c1 ≥ 0 ∧ c1 < graph_nc ∧
+         c2 ≥ 0 ∧ c2 < graph_nc ∧ ¬(c1 = c2) ∧
+         ¬(graph_inc(n, c1) = 0) ∧ ¬(graph_inc(n, c2) = 0))
+        → ¬(is_place(c1) ∧ is_place(c2)) ∧
+          ¬(is_transition(c1) ∧ is_transition(c2)))
+}
+```
+
+**Adding verification for a new domain** requires only writing a companion
+`.kleis` file that maps generic primitives to domain semantics. No Rust changes.
+
+### 9. Future Domain Support Without Code Changes
 
 New domains require only:
 
-1. A `.kleist` file with component templates (SVGs, ports, metadata)
-2. A `@template __domain_<name>` block declaring routing preferences
+1. A `.kleist` file with component templates (SVGs, ports, metadata, params)
+2. A `@template __domain_<name>` block declaring routing/verify preferences
 3. SVG assets in `static/svg/<domain>/`
+4. *(Optional)* A companion `.kleis` theory for Z3 verification
 
-No JavaScript, no Rust, no recompilation. Examples:
-
-**Bond graphs** (`bond_graph.kleist`):
-```kleist
-@template __domain_bond_graph {
-    routing_mode: "direct"
-    junction_style: "none"
-    multi_port_strategy: "star"
-    edge_decoration: "half_arrow"
-    edge_direction: "directed"
-}
-```
-
-**Petri nets** (`petri_net.kleist`):
-```kleist
-@template __domain_petri_net {
-    routing_mode: "orthogonal"
-    junction_style: "none"
-    multi_port_strategy: "trunk_branch"
-    edge_decoration: "arrow"
-    edge_direction: "directed"
-}
-```
-
-**Molecular graphs** (`molecular.kleist`):
-```kleist
-@template __domain_molecular {
-    routing_mode: "direct"
-    junction_style: "none"
-    multi_port_strategy: "star"
-    edge_decoration: "none"
-    edge_direction: "undirected"
-}
-```
-
-### 6. Rust/WASM for Core Graph Logic
-
-Core graph computations (incidence matrix construction, Editor AST generation)
-run in Rust compiled to WebAssembly via `wasm-bindgen`/`wasm-pack`. This:
-
-- Shares types with the Kleis Rust codebase
-- Provides performance for large graphs
-- Enables future integration with the type system and Z3 verification
-- Falls back gracefully when WASM is unavailable
-
-The WASM crate is `graph-editor-wasm/` with entry points `compute_incidence`
-and `compute_editor_ast`.
+No JavaScript, no Rust, no recompilation.
 
 ## Implementation Status
 
@@ -236,30 +326,67 @@ and `compute_editor_ast`.
 - Domain configuration loading from `__domain_` templates
 - Routing mode dispatch (`orthogonal` vs `direct`)
 - Typst schematic export with proper scaling and rotation
-- Rust/WASM integration for incidence matrix and AST generation
-- **Signed sparse incidence matrix** in COO format (WASM + JS fallback)
+- **Signed sparse incidence matrix** in COO format (JS-based)
   - Entries are signed integers: +1 (first port), -1 (non-first port)
   - AST topology node changed from `Matrix(V,P,[dense])` to
     `SparseMatrix(V,P,[net,port,val,...])`
   - `renderMatrixHTML` materializes dense view from COO for display
 
-### Phase 2 (Planned): Edge Decorations and Direction
+### Phase 2 (Implemented): Edge Decorations and Direction
 
 - SVG marker definitions (arrowhead, half-arrow, causal bar)
 - `marker-start`/`marker-end` attributes based on `edge_decoration`
-- `direction` field on net connections for directed graphs
+- Direction encoding in incidence matrix entries for directed domains
+- Data-driven edge decoration via `.kleist` domain config
 
-### Phase 3 (Planned): Bond Graph Templates
+### Phase 3 (Implemented): Bond Graph Templates
 
-- `bond_graph.kleist` with component and junction templates
-- Direct routing mode fully exercised
-- Causal stroke rendering
+- `bond_graph.kleist` with effort/flow sources, R/C/I elements, transformers,
+  gyrators, 0-junctions, and 1-junctions
+- Direct routing mode with half-arrow decorations
+- Causal stroke rendering on bond connections
+- `componentType` metadata for causality analysis
+- SVG assets in `static/svg/bond_graph/`
 
-### Phase 4 (Planned): Petri Net Templates
+### Phase 4 (Implemented): Petri Net Templates
 
-- `petri_net.kleist` with place/transition templates
-- Token state rendering inside place SVGs
+- `petri_net.kleist` with place, transition, source place, and sink place
+  templates
+- Orthogonal routing with arrow decorations for directed arcs
+- `componentType` metadata (Place, Transition, SourcePlace, SinkPlace)
+- SVG assets in `static/svg/petri_net/`
+
+### Phase 5 (Implemented): Parameters and Verification
+
+- **Parameterized components**: `params` metadata in `.kleist` templates with
+  type/default declarations; property panel in Graph Editor for editing values
+- **Client-side structural verification**: generic `verifyGraph()` function
+  driven by `verify_*` metadata flags
+- **Server-side Z3 verification**: `POST /api/verify_graph` endpoint with
+  domain-agnostic preamble generation and companion theory evaluation
+- **Domain-agnostic preamble**: `build_graph_preamble()` emits generic graph
+  primitives (counts, type codes, params, incidence, closed-world axioms)
+- **Theory scanning**: preamble scans theory text for `TYPE_X` references to
+  assign codes to absent types
+- **Companion theory**: `petri_net.kleis` derives domain semantics entirely from
+  generic primitives
+- **23 tests** covering preamble structure, Z3 verification (pass and fail
+  cases), missing theories, and multi-domain scenarios
+
+### Phase 6 (Planned): Extended Verification
+
+- Token visualization in Petri net places
+- Arc weight support (weighted edges in incidence matrix)
+- Companion theories for electronics and bond graph domains
 - Simulation integration with existing ODE solver
+
+### WASM Status
+
+WASM was initially prototyped for graph logic but removed from the active code
+path due to overhead. All graph computations (incidence matrix construction,
+AST generation, preamble generation) are currently implemented in JavaScript
+(client-side) and Rust (server-side, synchronous). WASM may be revisited for
+computationally intensive operations (e.g., large graph layout, ODE simulation).
 
 ## Consequences
 
@@ -270,20 +397,31 @@ and `compute_editor_ast`.
 2. **The incidence matrix representation is universal.** Electronics, bond
    graphs, Petri nets, and molecular graphs all use the same data model.
 3. **Domain extensibility is data-driven.** New graph domains require only
-   `.kleist` files and SVG assets. The routing engine is generic.
+   `.kleist` files, SVG assets, and optional `.kleis` theory files. The routing
+   engine and verification pipeline are generic.
 4. **The existing AST is unchanged.** Graphs are values inside the tree AST, not
    a competing representation. All existing Kleis infrastructure (type inference,
    Z3, evaluation) continues to work.
 5. **Separation of editors prevents regressions.** The Equation Editor is
    untouched by graph editing work.
+6. **Server is domain-agnostic.** `server.rs` contains zero domain-specific
+   code. All domain semantics live in `.kleis` theory files, interpreted by Z3.
+7. **Closed-world axioms prevent Z3 exploitation.** The preamble constrains all
+   uninterpreted functions so Z3 cannot invent values for unconstrained inputs.
+8. **Theory scanning bridges preamble and theory.** Types referenced by the
+   theory but absent from the graph get assigned concrete unused codes, preventing
+   Z3 from equating undefined TYPE constants with existing ones.
 
 ### Negative
 
 1. **Two editors to maintain.** The Graph Editor and Equation Editor share no
    rendering code. Future changes to common patterns (e.g., template loading)
    must be applied in both places.
-2. **Phase 2-4 features are not yet implemented.** Edge decorations, directed
-   graphs, and non-electronics domains remain planned but unbuilt.
+2. **No bounded model checking.** The domain-agnostic architecture precludes
+   server-side state space exploration (e.g., Petri net reachability analysis).
+   Verification is limited to what Z3 can prove from the incidence matrix and
+   component parameters directly. Future work could add a generic BFS framework
+   as an opt-in extension.
 3. **No persistent trunk waypoints for multi-port nets.** Trunk routing is
    recomputed each time; users cannot manually adjust trunk segments of
    multi-port nets (only 2-port nets have persistent draggable waypoints).
@@ -295,19 +433,29 @@ and `compute_editor_ast`.
    recognize a first-class `@graph_domain` block.
 2. **Pan/zoom uses SVG `viewBox`**, which is performant and well-supported but
    limits future layering (e.g., HTML overlays would not pan with the SVG).
+3. **Theory scanning is string-based.** It finds `TYPE_X` patterns via simple
+   text splitting, not AST analysis. This is fragile if `TYPE_` appears in
+   comments or strings, but sufficient for the current use case.
 
 ## Files
 
 | File | Role |
 |------|------|
 | `static/graph_editor.html` | Graph Editor HTML structure |
-| `static/js/graphEditorMain.js` | Core editor logic: interaction, routing, rendering |
-| `std_template_lib/electronics.kleist` | Electronics component templates + `__domain_electronics` config |
-| `graph-editor-wasm/` | Rust/WASM crate for incidence matrix and AST generation |
+| `static/js/graphEditorMain.js` | Core editor logic: interaction, routing, rendering, verification |
+| `src/bin/server.rs` | `/api/verify_graph` endpoint, domain-agnostic preamble generator |
+| `std_template_lib/electronics.kleist` | Electronics templates + `__domain_electronics` config |
+| `std_template_lib/bond_graph.kleist` | Bond graph templates + `__domain_bond_graph` config |
+| `std_template_lib/petri_net.kleist` | Petri net templates + `__domain_petri_net` config |
+| `std_template_lib/petri_net.kleis` | Petri net companion theory (Z3 verification) |
 | `static/svg/electronics/` | SVG assets for electronic components |
+| `static/svg/bond_graph/` | SVG assets for bond graph elements |
+| `static/svg/petri_net/` | SVG assets for Petri net elements |
 
 ## References
 
+- ADR-022: Z3 Integration for Axiom Verification — the verification backend
+  used by companion theories
 - ADR-036: Multi-Domain Template Generality — established the Level 1/2/3
   classification; this ADR implements Level 3
 - ADR-035: Multi-Domain Template Compiler — engine fixes for data-driven

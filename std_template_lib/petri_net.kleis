@@ -1,0 +1,58 @@
+// =============================================================================
+// Petri Net / Workflow Net Verification Theory
+// =============================================================================
+//
+// Companion theory for petri_net.kleist — loaded by /api/verify_graph.
+//
+// The server provides ONLY generic graph primitives (domain-agnostic):
+//   graph_nc, graph_nn          — component/net counts
+//   graph_ctype(c)              — integer type code for component c
+//   graph_param(c, j)           — j-th parameter of component c
+//   graph_inc(net, comp)        — signed incidence (+1 source, -1 target)
+//   TYPE_Place, TYPE_SourcePlace, TYPE_SinkPlace, TYPE_Transition — type codes
+//
+// This theory derives ALL Petri-net semantics from those primitives.
+// =============================================================================
+
+// Petri-net domain interpretation of generic graph data
+
+define is_place(c) =
+    graph_ctype(c) = TYPE_Place ∨
+    graph_ctype(c) = TYPE_SourcePlace ∨
+    graph_ctype(c) = TYPE_SinkPlace
+
+define is_transition(c) = graph_ctype(c) = TYPE_Transition
+
+define is_source(c) = graph_ctype(c) = TYPE_SourcePlace
+
+define is_sink(c) = graph_ctype(c) = TYPE_SinkPlace
+
+// Initial marking: first parameter (index 0) of a place is its token count
+define tokens(c) = graph_param(c, 0)
+
+// =============================================================================
+// Structural verification — checked by Z3
+// =============================================================================
+
+example "INITIAL MARKING: some component has tokens" {
+    assert(∃(c : ℤ). c ≥ 0 ∧ c < graph_nc ∧ is_place(c) ∧ tokens(c) ≥ 1)
+}
+
+example "BIPARTITE: every arc crosses place/transition boundary" {
+    assert(∀(n : ℤ). ∀(c1 : ℤ). ∀(c2 : ℤ).
+        (n ≥ 0 ∧ n < graph_nn ∧
+         c1 ≥ 0 ∧ c1 < graph_nc ∧
+         c2 ≥ 0 ∧ c2 < graph_nc ∧
+         ¬(c1 = c2) ∧
+         ¬(graph_inc(n, c1) = 0) ∧
+         ¬(graph_inc(n, c2) = 0))
+        → ¬(is_place(c1) ∧ is_place(c2)) ∧ ¬(is_transition(c1) ∧ is_transition(c2)))
+}
+
+example "SOURCE EXISTS: at least one source place" {
+    assert(∃(c : ℤ). c ≥ 0 ∧ c < graph_nc ∧ is_source(c))
+}
+
+example "SINK EXISTS: at least one sink place" {
+    assert(∃(c : ℤ). c ≥ 0 ∧ c < graph_nc ∧ is_sink(c))
+}

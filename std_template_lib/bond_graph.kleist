@@ -31,6 +31,8 @@
     multi_port_strategy: "star"
     edge_decoration: "half_arrow"
     edge_direction: "directed"
+    verify_causality: "true"
+    verify_no_isolated: "true"
 }
 
 // ============ SOURCES ============

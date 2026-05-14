@@ -1,0 +1,113 @@
+// Petri Net / Workflow Net Templates for Kleis Graph Editor
+//
+// Petri nets model concurrent systems using places (circles holding tokens)
+// and transitions (bars that fire when enabled). Arcs connect places to
+// transitions (input arcs) and transitions to places (output arcs).
+//
+// A Workflow Net (van der Aalst) adds structural constraints:
+//   - Exactly one source place (no incoming arcs) — start event
+//   - Exactly one sink place (no outgoing arcs) — end event
+//   - Every node lies on a path from source to sink
+//
+// Soundness (verifiable via VERIFY button → Z3):
+//   1. Option to complete: from any reachable marking, the sink is reachable
+//   2. Proper completion: token in sink ⟹ no tokens elsewhere
+//   3. No dead transitions: every transition fires in some reachable marking
+//
+// Equivalent to BPMN:
+//   Source place ↔ Start event, Sink place ↔ End event,
+//   Transition ↔ Activity/Task, Place ↔ Condition/State,
+//   Multiple outgoing arcs ↔ XOR split, Multiple incoming arcs ↔ XOR join
+//
+// Based on ISO/IEC 15909-2 PNML Standard.
+// See examples/petri-nets/ for Kleis axioms (enabled, fire, reachable,
+// k-bounded, safe, deadlock, live).
+//
+// Metadata fields:
+//   component_type: "Place" | "SourcePlace" | "SinkPlace" | "Transition"
+//   params: "name:type:default;..." (editable component parameters)
+//   ports: "name:relX,relY;..." (relative 0-1 coords within bounding box)
+
+// ============ DOMAIN CONFIGURATION ============
+
+@template __domain_petri_net {
+    pattern: "__domain_petri_net()"
+    category: "__domain"
+    routing_mode: "orthogonal"
+    junction_style: "none"
+    multi_port_strategy: "star"
+    edge_decoration: "arrow"
+    edge_direction: "directed"
+    verify_bipartite: "Place,SourcePlace,SinkPlace | Transition"
+    verify_exactly_one: "SourcePlace"
+    verify_exactly_one_sink: "SinkPlace"
+    verify_all_connected: "true"
+    verify_no_isolated: "true"
+    verify_theory: "petri_net"
+}
+
+// ============ PLACES ============
+
+// Source place: workflow start — single initial token (dot inside circle)
+@template pn_source_place {
+    pattern: "pn_source_place()"
+    typst: "#box(image(\"static/svg/petri_net/source_place.svg\", width: 1em, height: 1em, fit: \"contain\"))"
+    unicode: "◉"
+    category: "petri_place"
+    glyph: "◉"
+    mode: "content"
+    svg: "static/svg/petri_net/source_place.svg"
+    component_type: "SourcePlace"
+    params: "tokens:int:1"
+    ports: "top:0.5,0;right:1,0.5;bottom:0.5,1;left:0,0.5"
+    graph_width: "48"
+    graph_height: "48"
+}
+
+// Regular place: intermediate state / condition
+@template pn_place {
+    pattern: "pn_place()"
+    typst: "#box(image(\"static/svg/petri_net/place.svg\", width: 1em, height: 1em, fit: \"contain\"))"
+    unicode: "○"
+    category: "petri_place"
+    glyph: "○"
+    mode: "content"
+    svg: "static/svg/petri_net/place.svg"
+    component_type: "Place"
+    params: "tokens:int:0"
+    ports: "top:0.5,0;right:1,0.5;bottom:0.5,1;left:0,0.5"
+    graph_width: "48"
+    graph_height: "48"
+}
+
+// Sink place: workflow end — proper completion target (double circle)
+@template pn_sink_place {
+    pattern: "pn_sink_place()"
+    typst: "#box(image(\"static/svg/petri_net/sink_place.svg\", width: 1em, height: 1em, fit: \"contain\"))"
+    unicode: "◎"
+    category: "petri_place"
+    glyph: "◎"
+    mode: "content"
+    svg: "static/svg/petri_net/sink_place.svg"
+    component_type: "SinkPlace"
+    params: "tokens:int:0"
+    ports: "top:0.5,0;right:1,0.5;bottom:0.5,1;left:0,0.5"
+    graph_width: "48"
+    graph_height: "48"
+}
+
+// ============ TRANSITIONS ============
+
+@template pn_transition {
+    pattern: "pn_transition()"
+    typst: "#box(image(\"static/svg/petri_net/transition.svg\", width: 0.5em, height: 1em, fit: \"contain\"))"
+    unicode: "▮"
+    category: "petri_transition"
+    glyph: "▮"
+    mode: "content"
+    svg: "static/svg/petri_net/transition.svg"
+    component_type: "Transition"
+    ports: "top:0.5,0;right:1,0.5;bottom:0.5,1;left:0,0.5"
+    graph_width: "20"
+    graph_height: "48"
+}

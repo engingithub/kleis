@@ -37,6 +37,22 @@ function parsePorts(portStr) {
     return ports;
 }
 
+function parseParams(paramStr) {
+    if (!paramStr) return [];
+    const params = [];
+    for (const segment of paramStr.split(';')) {
+        const parts = segment.split(':');
+        if (parts.length < 3) continue;
+        const [name, type, defaultVal] = parts.map(s => s.trim());
+        params.push({
+            name,
+            type,
+            default: type === 'int' ? parseInt(defaultVal, 10) : parseFloat(defaultVal),
+        });
+    }
+    return params;
+}
+
 function categoryLabel(cat) {
     const suffix = cat.split('_').slice(1).join(' ');
     return suffix.charAt(0).toUpperCase() + suffix.slice(1);
@@ -57,6 +73,9 @@ async function loadComponentDefs() {
             for (const key of Object.keys(domainConfig)) {
                 if (meta[key]) domainConfig[key] = meta[key];
             }
+            for (const key of Object.keys(meta)) {
+                if (key.startsWith('verify_')) domainConfig[key] = meta[key];
+            }
             continue;
         }
 
@@ -71,6 +90,9 @@ async function loadComponentDefs() {
             w: Number.parseInt(meta.graph_width, 10) || 64,
             h: Number.parseInt(meta.graph_height, 10) || 32,
             ports: parsePorts(meta.ports),
+            params: parseParams(meta.params),
+            componentType: meta.component_type || null,
+            causalityType: meta.causality_type || null,
         };
 
         if (!sectionMap[cat]) sectionMap[cat] = [];
@@ -91,7 +113,7 @@ let nextComponentId = 0;
 let nextNetId = 0;
 
 const graphState = {
-    components: [],   // { id, type, x, y, rotation }
+    components: [],   // { id, type, x, y, rotation, params: {name: value} }
     nets: [],         // { id, label, connections: [{componentId, portName}] }
 };
 
@@ -217,6 +239,265 @@ function selectPaletteItem(type) {
     });
     setMode('place');
     updateStatus();
+}
+
+// ---------------------------------------------------------------------------
+// Property Panel — edit component parameters
+// ---------------------------------------------------------------------------
+
+function updatePropertyPanel() {
+    const content = document.getElementById('propertyContent');
+    if (!content) return;
+
+    if (!selectedComponentId) {
+        content.innerHTML = '<span class="empty-msg">Select a component</span>';
+        return;
+    }
+
+    const comp = graphState.components.find(c => c.id === selectedComponentId);
+    if (!comp) {
+        content.innerHTML = '<span class="empty-msg">Select a component</span>';
+        return;
+    }
+
+    const def = COMPONENT_DEFS[comp.type];
+    if (!def || !def.params || def.params.length === 0) {
+        content.innerHTML = `<span class="empty-msg">${comp.type} — no parameters</span>`;
+        return;
+    }
+
+    if (!comp.params) comp.params = {};
+
+    let html = '';
+    for (const p of def.params) {
+        const val = comp.params[p.name] ?? p.default;
+        const step = p.type === 'int' ? '1' : 'any';
+        html += `<div class="prop-row">
+            <label>${p.name}</label>
+            <input type="number" step="${step}" value="${val}"
+                   data-comp-id="${comp.id}" data-param="${p.name}" data-ptype="${p.type}">
+            <span class="prop-type">${p.type}</span>
+        </div>`;
+    }
+    content.innerHTML = html;
+
+    content.querySelectorAll('input[type="number"]').forEach(input => {
+        input.addEventListener('change', (e) => {
+            const c = graphState.components.find(c => c.id === e.target.dataset.compId);
+            if (!c) return;
+            if (!c.params) c.params = {};
+            const raw = e.target.value;
+            c.params[e.target.dataset.param] = e.target.dataset.ptype === 'int'
+                ? parseInt(raw, 10) : parseFloat(raw);
+            updateOutput();
+        });
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Verify — generic data-driven structural checks from domainConfig.verify_*
+// ---------------------------------------------------------------------------
+
+function verifyGraph() {
+    const results = [];
+
+    const compTypes = graphState.components.map(c => {
+        const def = COMPONENT_DEFS[c.type];
+        return { id: c.id, type: c.type, componentType: def?.componentType || c.type };
+    });
+
+    // verify_bipartite: "GroupA,B | GroupC,D"
+    if (domainConfig.verify_bipartite) {
+        const [groupAStr, groupBStr] = domainConfig.verify_bipartite.split('|').map(s => s.trim());
+        const groupA = new Set(groupAStr.split(',').map(s => s.trim()));
+        const groupB = new Set(groupBStr.split(',').map(s => s.trim()));
+
+        let pass = true;
+        let failMsg = '';
+        for (const net of graphState.nets) {
+            if (net.connections.length < 2) continue;
+            const types = net.connections.map(conn => {
+                const ct = compTypes.find(c => c.id === conn.componentId);
+                return ct ? ct.componentType : '?';
+            });
+            const hasA = types.some(t => groupA.has(t));
+            const hasB = types.some(t => groupB.has(t));
+            const allA = types.every(t => groupA.has(t));
+            const allB = types.every(t => groupB.has(t));
+            if ((hasA && hasB) && !allA && !allB) continue;
+            if (allA || allB) {
+                pass = false;
+                failMsg = `Net ${net.label}: connects components of the same group`;
+                break;
+            }
+        }
+        results.push({ rule: 'Bipartite structure', pass, msg: failMsg || 'Arcs correctly cross between groups' });
+    }
+
+    // verify_exactly_one: "Type"
+    for (const key of Object.keys(domainConfig)) {
+        const match = key.match(/^verify_exactly_one(?:_(\w+))?$/);
+        if (!match) continue;
+        const requiredType = domainConfig[key];
+        const count = compTypes.filter(c => c.componentType === requiredType).length;
+        results.push({
+            rule: `Exactly one ${requiredType}`,
+            pass: count === 1,
+            msg: count === 1 ? `Found 1 ${requiredType}` : `Found ${count} ${requiredType}(s), expected exactly 1`,
+        });
+    }
+
+    // verify_requires_type: "Type"
+    if (domainConfig.verify_requires_type) {
+        const reqType = domainConfig.verify_requires_type;
+        const count = compTypes.filter(c => c.componentType === reqType).length;
+        results.push({
+            rule: `Requires ${reqType}`,
+            pass: count >= 1,
+            msg: count >= 1 ? `Found ${count} ${reqType}(s)` : `No ${reqType} found — at least one required`,
+        });
+    }
+
+    // verify_no_isolated: "true"
+    if (domainConfig.verify_no_isolated === 'true') {
+        const connectedIds = new Set();
+        for (const net of graphState.nets) {
+            for (const conn of net.connections) connectedIds.add(conn.componentId);
+        }
+        const isolated = graphState.components.filter(c => !connectedIds.has(c.id));
+        results.push({
+            rule: 'No isolated components',
+            pass: isolated.length === 0,
+            msg: isolated.length === 0 ? 'All components connected' : `${isolated.length} isolated component(s): ${isolated.map(c => c.id).join(', ')}`,
+        });
+    }
+
+    // verify_all_connected: "true" (all nodes reachable from each other via undirected traversal)
+    if (domainConfig.verify_all_connected === 'true' && graphState.components.length > 0) {
+        const adj = {};
+        for (const c of graphState.components) adj[c.id] = new Set();
+        for (const net of graphState.nets) {
+            const ids = net.connections.map(conn => conn.componentId);
+            for (let i = 0; i < ids.length; i++) {
+                for (let j = i + 1; j < ids.length; j++) {
+                    if (adj[ids[i]]) adj[ids[i]].add(ids[j]);
+                    if (adj[ids[j]]) adj[ids[j]].add(ids[i]);
+                }
+            }
+        }
+        const visited = new Set();
+        const queue = [graphState.components[0].id];
+        visited.add(queue[0]);
+        while (queue.length > 0) {
+            const cur = queue.shift();
+            for (const neighbor of (adj[cur] || [])) {
+                if (!visited.has(neighbor)) { visited.add(neighbor); queue.push(neighbor); }
+            }
+        }
+        const unreachable = graphState.components.filter(c => !visited.has(c.id));
+        results.push({
+            rule: 'All connected',
+            pass: unreachable.length === 0,
+            msg: unreachable.length === 0 ? 'Graph is fully connected' : `${unreachable.length} unreachable component(s)`,
+        });
+    }
+
+    // verify_causality: "true" (bond graph junction causality)
+    if (domainConfig.verify_causality === 'true') {
+        let allOk = true;
+        let failMsg = '';
+        for (const comp of graphState.components) {
+            const def = COMPONENT_DEFS[comp.type];
+            if (!def || !def.causalityType) continue;
+            const ct = def.causalityType;
+            if (ct === 'constrained_0junc' || ct === 'constrained_1junc') {
+                const connectedNets = graphState.nets.filter(n =>
+                    n.connections.some(c => c.componentId === comp.id));
+                if (connectedNets.length > 0) {
+                    const causalCount = connectedNets.filter(n => n.causal).length;
+                    if (causalCount === 0 && connectedNets.length > 1) {
+                        allOk = false;
+                        failMsg = `${comp.id} (${comp.type}): no causal strokes assigned`;
+                    }
+                }
+            }
+        }
+        results.push({
+            rule: 'Causality constraints',
+            pass: allOk,
+            msg: allOk ? 'Junction causality OK' : failMsg,
+        });
+    }
+
+    const structuralFailed = results.some(r => !r.pass);
+
+    if (structuralFailed || !domainConfig.verify_theory) {
+        showVerifyResults(results);
+        return;
+    }
+
+    const inc = buildIncidenceMatrixJS();
+    const payload = {
+        domain: domainConfig.verify_theory,
+        components: graphState.components.map(c => {
+            const def = COMPONENT_DEFS[c.type];
+            return {
+                type: c.type,
+                component_type: def?.componentType || null,
+                params: c.params || {},
+            };
+        }),
+        incidence: { entries: inc.entries, v: inc.v, p: inc.p },
+        port_labels: inc.port_labels,
+    };
+
+    showVerifyResults(results, true);
+
+    fetch('/api/verify_graph', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+    })
+    .then(r => r.json())
+    .then(resp => {
+        const z3Results = (resp.results || []).map(r => ({
+            rule: `Z3: ${r.name}`,
+            pass: r.passed,
+            msg: r.passed ? 'Verified' : (r.error || 'Failed'),
+        }));
+        showVerifyResults([...results, ...z3Results]);
+    })
+    .catch(err => {
+        showVerifyResults([...results, {
+            rule: 'Z3 verification',
+            pass: false,
+            msg: `Server error: ${err.message}`,
+        }]);
+    });
+}
+
+function showVerifyResults(results, loading) {
+    const panel = document.getElementById('verifyResults');
+    if (!panel) return;
+
+    const allPass = results.every(r => r.pass);
+    let title = allPass ? 'All checks passed' : 'Issues found';
+    if (loading) title += ' (Z3 running...)';
+    let html = `<h3>${title}</h3>`;
+    for (const r of results) {
+        const icon = r.pass ? '<span class="vr-pass">&#10003;</span>' : '<span class="vr-fail">&#10007;</span>';
+        html += `<div class="vr-item">${icon}<div><strong>${r.rule}</strong><br>${r.msg}</div></div>`;
+    }
+    if (loading) {
+        html += '<div class="vr-item" style="color:#6c757d">Running Z3 verification...</div>';
+    }
+    html += '<button class="vr-close" id="verifyClose">Close</button>';
+    panel.innerHTML = html;
+    panel.classList.add('visible');
+
+    document.getElementById('verifyClose').addEventListener('click', () => {
+        panel.classList.remove('visible');
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -660,10 +941,13 @@ function placeComponent(type, x, y) {
     if (!def) return;
     const cx = snapToGrid(x - def.w / 2);
     const cy = snapToGrid(y - def.h / 2);
-    const comp = { id: `c${nextComponentId++}`, type, x: cx, y: cy, rotation: 0 };
+    const params = {};
+    for (const p of def.params) params[p.name] = p.default;
+    const comp = { id: `c${nextComponentId++}`, type, x: cx, y: cy, rotation: 0, params };
     graphState.components.push(comp);
     selectedComponentId = comp.id;
     renderAll();
+    updatePropertyPanel();
     updateOutput();
     updateStatus();
 }
@@ -735,6 +1019,7 @@ function findNetForPort(componentId, portName) {
 function clearSelection() {
     selectedComponentId = null;
     selectedNetId = null;
+    updatePropertyPanel();
 }
 
 function deleteSelected() {
@@ -1038,6 +1323,7 @@ canvas.addEventListener('mousedown', (e) => {
         dragState = { componentId: clickedComp.id, offsetX: pt.x - clickedComp.x, offsetY: pt.y - clickedComp.y };
         canvas.style.cursor = 'grabbing';
         renderAll();
+        updatePropertyPanel();
         updateStatus();
         return;
     }
@@ -1384,6 +1670,9 @@ if (btnRotate) btnRotate.addEventListener('click', rotateSelected);
 const btnCleanWires = document.getElementById('btnCleanWires');
 if (btnCleanWires) btnCleanWires.addEventListener('click', autoRouteAllNets);
 
+const btnVerify = document.getElementById('btnVerify');
+if (btnVerify) btnVerify.addEventListener('click', verifyGraph);
+
 document.getElementById('btnZoomIn').addEventListener('click', () => {
     const rect = canvasContainer.getBoundingClientRect();
     zoomAtPoint(rect.left + rect.width / 2, rect.top + rect.height / 2, viewState.zoom + ZOOM_STEP);
@@ -1451,15 +1740,15 @@ function buildIncidenceMatrixJS() {
 
     for (let ni = 0; ni < graphState.nets.length; ni++) {
         const net = graphState.nets[ni];
-        for (const conn of net.connections) {
+        for (let ci_conn = 0; ci_conn < net.connections.length; ci_conn++) {
+            const conn = net.connections[ci_conn];
             const ci = graphState.components.findIndex(c => c.id === conn.componentId);
             if (ci < 0) continue;
             const def = COMPONENT_DEFS[graphState.components[ci].type];
             if (!def) continue;
             const pi = portIndex.findIndex(e => e.ci === ci && e.portName === conn.portName);
             if (pi < 0) continue;
-            const localIdx = Object.keys(def.ports).indexOf(conn.portName);
-            const value = localIdx === 0 ? 1 : -1;
+            const value = ci_conn === 0 ? 1 : -1;
             entries.push({ net: ni, port: pi, value });
         }
     }
@@ -1535,9 +1824,18 @@ function buildEditorASTJS() {
         }
     };
 
-    const componentNodes = graphState.components.map(comp => ({
-        Operation: { name: comp.type, args: [] }
-    }));
+    const componentNodes = graphState.components.map(comp => {
+        const args = [];
+        if (comp.params) {
+            const def = COMPONENT_DEFS[comp.type];
+            if (def && def.params) {
+                for (const p of def.params) {
+                    args.push({ Const: String(comp.params[p.name] ?? p.default) });
+                }
+            }
+        }
+        return { Operation: { name: comp.type, args } };
+    });
 
     const netLabels = graphState.nets.map(net => ({ Const: `"${net.label}"` }));
     const portLabels = inc.port_labels.map(l => ({ Const: `"${l}"` }));

@@ -212,10 +212,10 @@ This directory contains all Architecture Decision Records for the Kleis project.
 **Status:** Accepted  
 **Summary:** Validation that the atom-molecule template decomposition generalizes across mathematics, hieroglyphs, circuits, and chemistry
 
-### ADR-037: Graph Editor with Domain-Agnostic Routing
+### ADR-037: Graph Editor with Domain-Agnostic Routing and Verification
 **File:** `ADR-037-Graph-Editor-Domain-Agnostic-Routing.md`  
-**Status:** Accepted & Implemented (Phase 1)  
-**Summary:** Standalone graph editor with incidence-matrix AST representation, domain-configurable routing (trunk+branch, star), and `.kleist`-driven extensibility for electronics, bond graphs, Petri nets, and molecular graphs
+**Status:** Accepted & Implemented (Phases 1–5)  
+**Summary:** Standalone graph editor with incidence-matrix AST representation, domain-configurable routing (trunk+branch, star), parameterized components, and domain-agnostic Z3 verification via companion `.kleis` theory files. Extensible for electronics, bond graphs, Petri nets, and molecular graphs via `.kleist`/`.kleis` data files only — `server.rs` contains zero domain-specific code.
 
 ---
 
@@ -261,5 +261,5 @@ When creating a new ADR:
 ---
 
 **Total ADRs:** 37  
-**Last Updated:** April 27, 2026
+**Last Updated:** May 14, 2026
 
