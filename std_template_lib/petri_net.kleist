@@ -44,6 +44,7 @@
     verify_all_connected: "true"
     verify_no_isolated: "true"
     verify_theory: "petri_net"
+    sim_mode: "discrete"
 }
 
 // ============ PLACES ============
@@ -59,6 +60,9 @@
     svg: "static/svg/petri_net/source_place.svg"
     component_type: "SourcePlace"
     params: "tokens:int:1"
+    show_state: "true"
+    state_param: "tokens"
+    state_style: "dots"
     ports: "top:0.5,0;right:1,0.5;bottom:0.5,1;left:0,0.5"
     graph_width: "48"
     graph_height: "48"
@@ -75,6 +79,9 @@
     svg: "static/svg/petri_net/place.svg"
     component_type: "Place"
     params: "tokens:int:0"
+    show_state: "true"
+    state_param: "tokens"
+    state_style: "dots"
     ports: "top:0.5,0;right:1,0.5;bottom:0.5,1;left:0,0.5"
     graph_width: "48"
     graph_height: "48"
@@ -91,6 +98,9 @@
     svg: "static/svg/petri_net/sink_place.svg"
     component_type: "SinkPlace"
     params: "tokens:int:0"
+    show_state: "true"
+    state_param: "tokens"
+    state_style: "dots"
     ports: "top:0.5,0;right:1,0.5;bottom:0.5,1;left:0,0.5"
     graph_width: "48"
     graph_height: "48"

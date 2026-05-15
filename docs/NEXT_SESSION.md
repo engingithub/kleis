@@ -660,9 +660,9 @@ mode inside `$...$`. Needs experimental verification during implementation.
 
 ---
 
-### Graph Editor — IMPLEMENTED (Phases 1–6)
+### Graph Editor — IMPLEMENTED (Phases 1–8)
 
-**Status:** Phases 1–6 complete. Domain-agnostic routing, parameters, and Z3 verification working.
+**Status:** Phases 1–8 complete. Domain-agnostic routing, parameters, Z3 verification, and theory-driven simulation working.
 **ADR:** `docs/adr/ADR-037-Graph-Editor-Domain-Agnostic-Routing.md`
 **Plan file:** `.cursor/plans/domain-agnostic_multi-port_routing_83985610.plan.md`
 
@@ -930,7 +930,27 @@ data model (EditorNode AST), domain data (`.kleist`/`.kleis`), and server APIs.
   domain specialization via extension — same pattern as `stdlib/matrices.kleis` extending
   `minimal_prelude.kleis`.
 
-  **Phase 8 (planned): Graph Theory Domain & Königsberg Demo — arXiv Paper**
+  **Phase 8 (DONE): Theory-Driven Simulation**
+
+  Simulation logic moved from hardcoded Petri-net Rust in `server.rs` to `.kleis`
+  theory files, mirroring the verification architecture. Key changes:
+
+  - `petri_net.kleis` now contains simulation functions: `sim_enabled(t)`,
+    `sim_fire(t, c)`, `sim_halted()`, `sim_halt_reason()` — all using recursive
+    enumeration over `graph_nc_val`/`graph_nn_val` with `nth`-based lookup.
+  - `build_sim_preamble()` generates concrete `define` statements (not Z3 axioms)
+    for `eval_concrete` execution.
+  - Server `simulate_graph_core()` calls `eval_concrete` on theory-defined functions.
+  - Multi-step `Run` optimized: re-parses only `define sim_state = [...]` between steps.
+  - Reset uses client-provided initial state (from `.kleist` `stateParam` metadata).
+  - Client sends `last_fired` for round-robin transition selection.
+  - Bug fix: `"logical_and"`/`"logical_or"` aliases added to `eval_concrete` builtins.
+  - 9 tests pass including 5-token pipeline completing in 10 steps.
+  - **To add simulation for a new domain:** implement `sim_enabled`/`sim_fire`/
+    `sim_halted`/`sim_halt_reason` in the companion `.kleis` theory file. No Rust
+    or JS changes needed.
+
+  **Phase 9 (planned): Graph Theory Domain & Königsberg Demo — arXiv Paper**
 
   The graph theory domain was added as an architecture validation — a fourth domain
   (after electronics, bond graphs, Petri nets) implemented with **zero code changes**:
@@ -959,68 +979,25 @@ data model (EditorNode AST), domain data (`.kleist`/`.kleis`), and server APIs.
   **Eulerian path check** requires bounded aggregation (counting incident edges mod 2).
   Planned as a Kleis language feature — would enable `degree(c)` and parity checks.
 
-  **Short circuit detection — motivates a Kleis reachability primitive:**
+  **Short circuit detection — expressible now via matrix rank:**
 
-  A short circuit is a graph reachability question: "Can I traverse from one
-  terminal of a voltage source to the other using only connector/wire components?"
-  This is Union-Find on the connector-only subgraph of the incidence matrix. It
-  cannot be expressed in first-order logic (requires transitive closure). Writing
-  it as client-side JS would violate the domain-agnostic architecture (it's
-  electronics-specific knowledge). The correct solution is a **Kleis language
-  extension** — a `reachable(n1, n2, filter)` predicate or bounded path search
-  that the evaluator computes from `graph_inc`. This would enable:
-
-  ```kleis
-  // hypothetical future syntax
-  define wire_connected(n1, n2) = reachable(n1, n2, is_connector)
-
-  assert(∀(v : ℤ). is_voltage_source(v)
-      → ¬ wire_connected(net_pos(v), net_neg(v)))
-  ```
-
-  The same primitive generalizes to other domains: deadlock detection in Petri
-  nets (reachable markings), causality propagation in bond graphs (reachable
-  junctions), and connectivity checks in graph theory (Euler paths). This is a
-  concrete use case that motivates adding graph reachability to the Kleis
-  evaluator as a built-in, not a domain-specific workaround.
-
-  **Theory interface declarations — replace text scanning with explicit structure declarations:**
-
-  Currently `build_graph_preamble` scans the `.kleis` theory source text for
-  `TYPE_X` string patterns to discover what the theory needs. This is a hack.
-  The theory should explicitly declare its requirements as a structure with
-  operations but no axioms (an interface/trait):
-
-  ```kleis
-  structure BondGraphTypes {
-      operation TYPE_EffortSource : ℤ
-      operation TYPE_FlowSource : ℤ
-      operation TYPE_Resistor : ℤ
-      // ...
-  }
-  ```
-
-  The preamble generator would then read parsed structure declarations instead
-  of scanning text, and emit `structure GraphData extends BondGraphTypes { ... }`
-  with concrete axioms. This makes the verification pipeline type-safe — the
-  Kleis parser catches a theory that references `TYPE_Foo` without declaring it,
-  instead of Z3 silently treating it as unconstrained.
-
-  Kleis already has structures with operations and axioms. The missing pieces:
-  1. A structure with operations but no axioms = interface/trait
-  2. `extends` or `implements` = providing axioms for declared operations
-  3. Preamble generator reads parsed AST instead of scanning text
-
-  **Key insight: reachability is a matrix rank condition, not a graph traversal.**
   A short circuit exists iff the connector-only submatrix of `graph_inc` has a
   rank deficiency that places both terminals of a voltage source in the same
-  connected component. This is linear algebra on a filtered submatrix — and
-  Kleis already has matrix operations (rank, determinant). No new `reachable`
-  built-in may be needed; the check could be expressed as a matrix rank condition
-  on the submatrix where `is_connector(c)` holds. The same applies to the ODE
-  formulation: the state-space matrix `M · dX/dt = A·X + B·u` derived from the
-  incidence matrix becomes singular at a short circuit. The singularity is
-  visible in the matrix before the solver even runs.
+  connected component. This is a matrix rank condition, not a graph traversal.
+  Kleis already has matrix operations and LAPACK integration — `rank()` on a
+  filtered submatrix is a standard call. No new built-in needed; the check is
+  an `example` assertion in `electronics.kleis` using existing primitives.
+
+  The same linear algebra applies to the ODE formulation: the state-space matrix
+  `M · dX/dt = A·X + B·u` derived from the incidence matrix becomes singular at
+  a short circuit. The singularity is visible in the matrix before the solver
+  even runs.
+
+  **Theory interface declarations — DONE (PR #70):**
+
+  Theories now explicitly declare `operation TYPE_X : ℤ` for each type they
+  reference. The preamble generator parses the theory AST and extracts
+  `OperationDecl` items instead of scanning text. See ADR-037 Section 7.
 
 #### Still open
 

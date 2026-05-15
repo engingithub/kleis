@@ -1,7 +1,7 @@
 # ADR-037: Graph Editor with Domain-Agnostic Routing and Verification
 
-**Status:** Accepted & Implemented (Phases 1–7)
-**Date:** 2026-04-27 (original), 2026-05-14 (Phase 7 + theory declarations)
+**Status:** Accepted & Implemented (Phases 1–8)
+**Date:** 2026-04-27 (original), 2026-05-14 (Phase 8 + theory-driven simulation)
 **Relates to:** ADR-005 (Visual Authoring), ADR-022 (Z3 Integration), ADR-023
 (Template Externalization), ADR-035 (Multi-Domain Template Compiler), ADR-036
 (Multi-Domain Template Generality)
@@ -563,6 +563,64 @@ No other files need to be created or modified.
 - **33 Rust tests** covering preamble structure, Z3 verification (pass and
   fail cases), theory loading, and the new type declaration extraction
 
+### Phase 8 (Implemented): Theory-Driven Simulation
+
+Simulation was initially hardcoded in `server.rs` with Petri-net-specific logic
+(enabled detection, token transfer, halt classification). This violated the
+domain-agnostic principle established for verification. Phase 8 refactors
+simulation to mirror the verification architecture: domain-specific semantics
+live entirely in `.kleis` theory files, executed via `eval_concrete`.
+
+**Architecture:** Two preamble modes in the same theory file:
+
+| Mode | Preamble Style | Execution Engine | Purpose |
+|------|---------------|-----------------|---------|
+| Verification | `operation` + `axiom` in `GraphData` | Z3 | Symbolic ∀/∃ proofs |
+| Simulation | `define` with `nth`-based lookup | `eval_concrete` | Concrete step-by-step execution |
+
+**Simulation preamble** (`build_sim_preamble`): generates concrete `define`
+statements instead of Z3 operations/axioms:
+
+```kleis
+define sim_state = [5, 0, 0, 0, 0]         // current state (updated per step)
+define graph_nc_val = 5                      // component count
+define graph_nn_val = 4                      // net count
+define graph_ctype_val(c) = nth([1,2,3,2,4], c)   // type codes as list
+define graph_inc_val(n, c) = nth(nth([...], n), c) // incidence as nested lists
+define TYPE_Place = 3                        // concrete type code values
+define TYPE_Transition = 2
+```
+
+**Theory simulation interface** (contract that any simulation-enabled theory
+must implement):
+
+| Function | Returns | Semantics |
+|----------|---------|-----------|
+| `sim_enabled(t)` | `true`/`false` | Is component `t` enabled to fire? |
+| `sim_fire(t, c)` | integer | New state value for component `c` after `t` fires |
+| `sim_halted()` | `true`/`false` | Are no components enabled? |
+| `sim_halt_reason()` | `"completed"`/`"deadlock"` | Why did simulation stop? |
+
+**Recursive enumeration:** Since `eval_concrete` has no loop construct, the
+theory uses bounded recursion over `graph_nc_val` and `graph_nn_val` to
+enumerate components and nets. For example, `sim_enabled(t)` recursively
+checks all nets via `sim_all_nets_ok(t, graph_nn_val - 1)`, and each net
+recursively scans all places via `sim_net_has_source(t, n, graph_nc_val - 1)`.
+
+**Performance optimization for multi-step:** The server parses the full
+preamble + theory once, then for each step only re-parses a single-line
+`define sim_state = [...]` update that overrides the previous state in the
+evaluator's function table. This avoids full re-parse overhead during `Run`
+actions.
+
+**Bug fix:** Added `"logical_and"` and `"logical_or"` aliases to
+`eval_concrete` builtins. The parser generates these names for `∧`/`∨`
+operators, but only `"and"`/`"or"` and Unicode symbols were previously handled.
+
+**Test results:** 10 simulation tests pass, including a 5-token pipeline that
+correctly processes all tokens through a linear workflow (Source → T0 → Place
+→ T1 → Sink) in 10 steps with round-robin transition selection.
+
 ### WASM Status
 
 WASM was initially prototyped for graph logic but removed from the active code
@@ -603,11 +661,11 @@ computationally intensive operations (e.g., large graph layout, ODE simulation).
 1. **Two editors to maintain.** The Graph Editor and Equation Editor share no
    rendering code. Future changes to common patterns (e.g., template loading)
    must be applied in both places.
-2. **No bounded model checking.** The domain-agnostic architecture precludes
-   server-side state space exploration (e.g., Petri net reachability analysis).
-   Verification is limited to what Z3 can prove from the incidence matrix and
-   component parameters directly. Future work could add a generic BFS framework
-   as an opt-in extension.
+2. ~~**No bounded model checking.**~~ **Partially resolved by Phase 8.** The
+   domain-agnostic simulation architecture enables step-by-step state space
+   exploration via theory-defined `sim_enabled`/`sim_fire` functions. Full
+   reachability analysis (e.g., all reachable markings of a Petri net) would
+   require a generic BFS framework as a future extension.
 3. **No persistent trunk waypoints for multi-port nets.** Trunk routing is
    recomputed each time; users cannot manually adjust trunk segments of
    multi-port nets (only 2-port nets have persistent draggable waypoints).
@@ -630,7 +688,7 @@ computationally intensive operations (e.g., large graph layout, ODE simulation).
 |------|------|
 | `static/graph_editor.html` | Graph Editor HTML structure |
 | `static/js/graphEditorMain.js` | Core editor logic: interaction, routing, rendering, verification |
-| `src/bin/server.rs` | `/api/verify_graph` endpoint, domain-agnostic preamble generator |
+| `src/bin/server.rs` | `/api/verify_graph` + `/api/simulate_graph` endpoints, domain-agnostic preamble generators |
 | **Template files (`.kleist`)** | |
 | `std_template_lib/electronics.kleist` | Electronics templates + `__domain_electronics` config |
 | `std_template_lib/bond_graph.kleist` | Bond graph templates + `__domain_bond_graph` config |
@@ -639,7 +697,7 @@ computationally intensive operations (e.g., large graph layout, ODE simulation).
 | **Companion theories (`.kleis`)** | |
 | `std_template_lib/electronics.kleis` | Electronics verification (KVL/KCL structural checks) |
 | `std_template_lib/bond_graph.kleis` | Bond graph verification (SCAP structural checks) |
-| `std_template_lib/petri_net.kleis` | Petri net verification (bipartiteness, marking, reachability) |
+| `std_template_lib/petri_net.kleis` | Petri net verification + simulation (bipartiteness, marking, sim_enabled/fire/halt) |
 | `std_template_lib/graph_theory.kleis` | Abstract graph theory (degree parity, Eulerian path) |
 | **SVG assets** | |
 | `static/svg/electronics/` | SVG assets for electronic components |

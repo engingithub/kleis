@@ -155,7 +155,7 @@ impl Evaluator {
                 self.builtin_comparison(args, |a, b| a >= b)
             }
 
-            "and" | "∧" => {
+            "and" | "∧" | "logical_and" => {
                 if args.len() != 2 {
                     return Ok(None);
                 }
@@ -168,7 +168,7 @@ impl Evaluator {
                     _ => Ok(None),
                 }
             }
-            "or" | "∨" => {
+            "or" | "∨" | "logical_or" => {
                 if args.len() != 2 {
                     return Ok(None);
                 }

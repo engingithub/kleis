@@ -342,6 +342,49 @@
             cursor: pointer;
             font-size: 12px;
         }
+
+        /* Simulation panel controls */
+        .sim-controls { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+        .sim-controls button {
+            padding: 4px 10px; font-size: 12px; border-radius: 4px;
+            border: 1px solid #ccc; background: #f8f9fa; cursor: pointer;
+        }
+        .sim-controls button:hover { background: #e9ecef; }
+        .sim-controls button.sim-active { background: #28a745; color: white; border-color: #28a745; }
+        .sim-speed {
+            display: flex; align-items: center; gap: 6px;
+            margin-bottom: 8px; font-size: 12px;
+        }
+        .sim-speed button {
+            width: 24px; height: 24px; padding: 0; font-size: 14px;
+            border-radius: 4px; border: 1px solid #ccc; background: #f8f9fa;
+            cursor: pointer; line-height: 1;
+        }
+        .sim-speed button:hover { background: #e9ecef; }
+        #simSpeedLabel {
+            min-width: 52px; text-align: center;
+            font-variant-numeric: tabular-nums;
+        }
+        .sim-history { max-height: 150px; overflow-y: auto; font-size: 11px; margin-top: 8px; }
+        .sim-history-item { padding: 2px 0; border-bottom: 1px solid #eee; }
+        .sim-status { font-size: 12px; margin-top: 6px; padding: 4px 8px; border-radius: 4px; }
+        .sim-status.halted { background: #fff3cd; color: #856404; }
+        .sim-status.running { background: #d4edda; color: #155724; }
+
+        /* Simulate panel visibility */
+        #simulatePanel { display: none; }
+        #simulatePanel.visible { display: block; }
+
+        /* Enabled component highlight (pulsing green outline) */
+        .sim-enabled .component-outline {
+            stroke: #28a745 !important;
+            stroke-width: 2.5 !important;
+            animation: sim-pulse 0.8s ease-in-out infinite alternate;
+        }
+        @keyframes sim-pulse {
+            from { stroke-opacity: 0.5; }
+            to   { stroke-opacity: 1.0; }
+        }
     </style>
 </head>
 <body>
@@ -363,6 +406,7 @@
             <button id="btnFit" title="Fit all components in view">Fit</button>
             <div class="toolbar-sep"></div>
             <button id="btnVerify" title="Verify graph structure">Verify</button>
+            <button id="btnSimulate" title="Simulate dynamics">Simulate</button>
             <div class="toolbar-sep"></div>
             <button id="btnExportTypst" title="Copy Typst to clipboard">Copy Typst</button>
         </div>
@@ -380,6 +424,7 @@
 
         <div class="canvas-container" id="canvasContainer">
             <div class="verify-results" id="verifyResults"></div>
+            <div class="verify-results" id="simulatePanel"></div>
             <svg id="graphCanvas" xmlns="http://www.w3.org/2000/svg">
                 <defs>
                     <pattern id="gridPattern" width="20" height="20" patternUnits="userSpaceOnUse">
@@ -434,6 +479,7 @@
                 <rect id="gridRect" width="10000" height="10000" fill="url(#gridPattern)"/>
                 <g id="wiresLayer"></g>
                 <g id="componentsLayer"></g>
+                <g id="simOverlayLayer"></g>
                 <g id="previewLayer"></g>
             </svg>
             <div id="zoomIndicator" class="zoom-indicator">100%</div>

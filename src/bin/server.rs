@@ -419,6 +419,7 @@ async fn main() {
         .route("/api/verify", post(verify_handler))
         .route("/api/check_sat", post(check_sat_handler))
         .route("/api/verify_graph", post(verify_graph_handler))
+        .route("/api/simulate_graph", post(simulate_graph_handler))
         .route("/api/operations", get(operations_handler))
         .route("/api/templates", get(templates_handler))
         .route("/api/palette", get(palette_handler))
@@ -2478,6 +2479,486 @@ async fn verify_graph_handler(
 }
 
 // =============================================================================
+// Graph simulation — domain-agnostic discrete/continuous stepper
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+struct SimulateGraphRequest {
+    domain: String,
+    components: Vec<VerifyGraphComponent>,
+    incidence: VerifyGraphIncidence,
+    port_labels: Vec<String>,
+    state: Vec<f64>,
+    action: SimulateAction,
+    #[serde(default)]
+    last_fired: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+enum SimulateAction {
+    Step,
+    Run { max_steps: Option<usize> },
+    FindEnabled,
+    Reset,
+}
+
+#[derive(Debug, Serialize)]
+struct SimulateGraphResponse {
+    state: Vec<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    time_series: Option<Vec<SimulateTimeSample>>,
+    enabled: Vec<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fired: Option<usize>,
+    halted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    halt_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct SimulateTimeSample {
+    step: usize,
+    state: Vec<f64>,
+    fired: Option<usize>,
+}
+
+/// Build a simulation preamble: concrete defines for eval_concrete.
+///
+/// Unlike the verification preamble (Z3 axioms), this produces `define`
+/// statements with nth-based lookup so the theory's sim_* functions can
+/// be evaluated concretely without Z3.
+fn build_sim_preamble(req: &SimulateGraphRequest, state: &[f64]) -> String {
+    let nc = req.components.len();
+    let nn = req.incidence.v;
+
+    // Type code mapping (same logic as build_graph_preamble)
+    let mut type_map: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    let mut next_code: usize = 1;
+    for comp in &req.components {
+        let ct = comp
+            .component_type
+            .as_deref()
+            .unwrap_or("Unknown")
+            .to_string();
+        if !type_map.contains_key(&ct) {
+            type_map.insert(ct, next_code);
+            next_code += 1;
+        }
+    }
+
+    // Build component-level incidence matrix from port-level entries
+    let port_to_comp = |port_idx: usize| -> Option<usize> {
+        req.port_labels
+            .get(port_idx)
+            .and_then(|label| label.split(':').next())
+            .and_then(|ci_str| ci_str.parse::<usize>().ok())
+    };
+
+    let mut inc: std::collections::BTreeMap<(usize, usize), i64> =
+        std::collections::BTreeMap::new();
+    for entry in &req.incidence.entries {
+        if let Some(ci) = port_to_comp(entry.port) {
+            *inc.entry((entry.net, ci)).or_insert(0) += entry.value;
+        }
+    }
+
+    let mut preamble = String::new();
+    preamble.push_str("// Simulation preamble — auto-generated concrete defines\n");
+
+    // State vector
+    let state_str: Vec<String> = state.iter().map(|v| format!("{}", *v as i64)).collect();
+    preamble.push_str(&format!("define sim_state = [{}]\n", state_str.join(", ")));
+
+    // Graph dimensions
+    preamble.push_str(&format!("define graph_nc_val = {nc}\n"));
+    preamble.push_str(&format!("define graph_nn_val = {nn}\n"));
+
+    // Component type codes as list
+    let ctype_list: Vec<String> = req
+        .components
+        .iter()
+        .map(|c| {
+            let ct = c.component_type.as_deref().unwrap_or("Unknown").to_string();
+            format!("{}", type_map.get(&ct).copied().unwrap_or(0))
+        })
+        .collect();
+    preamble.push_str(&format!(
+        "define graph_ctype_val(c) = nth([{}], c)\n",
+        ctype_list.join(", ")
+    ));
+
+    // Incidence matrix as nested lists
+    let mut inc_rows: Vec<String> = Vec::new();
+    for n in 0..nn {
+        let row: Vec<String> = (0..nc)
+            .map(|c| format!("{}", inc.get(&(n, c)).copied().unwrap_or(0)))
+            .collect();
+        inc_rows.push(format!("[{}]", row.join(", ")));
+    }
+    if nn == 0 {
+        preamble.push_str("define graph_inc_val(n, c) = 0\n");
+    } else {
+        preamble.push_str(&format!(
+            "define graph_inc_val(n, c) = nth(nth([{}], n), c)\n",
+            inc_rows.join(", ")
+        ));
+    }
+
+    // TYPE_X constants as concrete defines
+    for (name, &code) in &type_map {
+        let safe_name = name.replace(' ', "_");
+        preamble.push_str(&format!("define TYPE_{safe_name} = {code}\n"));
+    }
+
+    // Also provide the verification-style names for the shared classification
+    // functions (is_place, is_transition etc.) that reference graph_ctype.
+    // The sim theory uses graph_ctype_val variants, so this isn't strictly needed,
+    // but we alias graph_ctype to graph_ctype_val for any shared code.
+    preamble.push_str("define graph_ctype(c) = graph_ctype_val(c)\n");
+
+    preamble.push('\n');
+    preamble
+}
+
+/// Build just the state-update define (for multi-step without full re-parse).
+fn build_sim_state_define(state: &[f64]) -> String {
+    let state_str: Vec<String> = state.iter().map(|v| format!("{}", *v as i64)).collect();
+    format!("define sim_state = [{}]\n", state_str.join(", "))
+}
+
+fn simulate_graph_core(req: SimulateGraphRequest) -> SimulateGraphResponse {
+    use kleis::ast::Expression;
+    use kleis::evaluator::Evaluator;
+    use kleis::kleis_parser::parse_kleis_program;
+
+    let nc = req.components.len();
+
+    let theory_path =
+        std::path::PathBuf::from("std_template_lib").join(format!("{}.kleis", req.domain));
+
+    if !theory_path.exists() {
+        return SimulateGraphResponse {
+            state: req.state,
+            time_series: None,
+            enabled: vec![],
+            fired: None,
+            halted: true,
+            halt_reason: None,
+            error: Some(format!(
+                "No companion theory file: {}",
+                theory_path.display()
+            )),
+        };
+    }
+
+    let theory_source = match std::fs::read_to_string(&theory_path) {
+        Ok(s) => s,
+        Err(e) => {
+            return SimulateGraphResponse {
+                state: req.state,
+                time_series: None,
+                enabled: vec![],
+                fired: None,
+                halted: true,
+                halt_reason: None,
+                error: Some(format!("Failed to read theory: {}", e)),
+            };
+        }
+    };
+
+    // Build structural preamble once (everything except sim_state)
+    let structural_preamble = build_sim_preamble(&req, &req.state);
+
+    // Build evaluator from state + pre-computed structural parts
+    let make_evaluator = |state: &[f64]| -> Result<Evaluator, String> {
+        let state_line = build_sim_state_define(state);
+        let full_source = format!("{}{}{}", state_line, structural_preamble, theory_source);
+        let program =
+            parse_kleis_program(&full_source).map_err(|e| format!("Parse error: {}", e))?;
+        let mut eval = Evaluator::new();
+        eval.load_program(&program)?;
+        Ok(eval)
+    };
+
+    // Eval helpers
+    let eval_enabled = |eval: &Evaluator, t: usize| -> bool {
+        let expr = Expression::Operation {
+            name: "sim_enabled".to_string(),
+            args: vec![Expression::Const(t.to_string())],
+            span: None,
+        };
+        match eval.eval_concrete(&expr) {
+            Ok(Expression::Const(ref s)) | Ok(Expression::Object(ref s)) => s == "true",
+            _ => false,
+        }
+    };
+
+    let eval_fire = |eval: &Evaluator, t: usize, c: usize| -> f64 {
+        let expr = Expression::Operation {
+            name: "sim_fire".to_string(),
+            args: vec![
+                Expression::Const(t.to_string()),
+                Expression::Const(c.to_string()),
+            ],
+            span: None,
+        };
+        match eval.eval_concrete(&expr) {
+            Ok(Expression::Const(ref s)) => s.parse::<f64>().unwrap_or(0.0),
+            _ => 0.0,
+        }
+    };
+
+    let eval_halt_reason = |eval: &Evaluator| -> String {
+        let expr = Expression::Operation {
+            name: "sim_halt_reason".to_string(),
+            args: vec![],
+            span: None,
+        };
+        match eval.eval_concrete(&expr) {
+            Ok(Expression::String(s)) => s,
+            Ok(Expression::Const(s)) => s,
+            _ => "unknown".to_string(),
+        }
+    };
+
+    let find_enabled =
+        |eval: &Evaluator| -> Vec<usize> { (0..nc).filter(|&t| eval_enabled(eval, t)).collect() };
+
+    let fire = |eval: &Evaluator, t: usize| -> Vec<f64> {
+        (0..nc).map(|c| eval_fire(eval, t, c)).collect()
+    };
+
+    let pick_next = |enabled: &[usize], last: Option<usize>| -> usize {
+        if enabled.len() <= 1 {
+            return enabled[0];
+        }
+        if let Some(prev) = last {
+            if let Some(&t) = enabled.iter().find(|&&e| e > prev) {
+                return t;
+            }
+        }
+        enabled[0]
+    };
+
+    let update_state = |eval: &mut Evaluator, state: &[f64]| -> Result<(), String> {
+        let state_src = build_sim_state_define(state);
+        let state_prog =
+            parse_kleis_program(&state_src).map_err(|e| format!("State parse error: {}", e))?;
+        eval.load_program(&state_prog)?;
+        Ok(())
+    };
+
+    match req.action {
+        SimulateAction::Reset => {
+            // The client provides the initial state (computed from stateParam
+            // metadata in .kleist). The server just validates it via the theory.
+            let eval = match make_evaluator(&req.state) {
+                Ok(e) => e,
+                Err(e) => {
+                    return SimulateGraphResponse {
+                        state: req.state,
+                        time_series: None,
+                        enabled: vec![],
+                        fired: None,
+                        halted: false,
+                        halt_reason: None,
+                        error: Some(e),
+                    };
+                }
+            };
+            let enabled = find_enabled(&eval);
+            SimulateGraphResponse {
+                state: req.state,
+                time_series: None,
+                enabled,
+                fired: None,
+                halted: false,
+                halt_reason: None,
+                error: None,
+            }
+        }
+
+        SimulateAction::FindEnabled => {
+            let eval = match make_evaluator(&req.state) {
+                Ok(e) => e,
+                Err(e) => {
+                    return SimulateGraphResponse {
+                        state: req.state,
+                        time_series: None,
+                        enabled: vec![],
+                        fired: None,
+                        halted: false,
+                        halt_reason: None,
+                        error: Some(e),
+                    };
+                }
+            };
+            let enabled = find_enabled(&eval);
+            SimulateGraphResponse {
+                state: req.state,
+                time_series: None,
+                enabled,
+                fired: None,
+                halted: false,
+                halt_reason: None,
+                error: None,
+            }
+        }
+
+        SimulateAction::Step => {
+            let eval = match make_evaluator(&req.state) {
+                Ok(e) => e,
+                Err(e) => {
+                    return SimulateGraphResponse {
+                        state: req.state,
+                        time_series: None,
+                        enabled: vec![],
+                        fired: None,
+                        halted: true,
+                        halt_reason: None,
+                        error: Some(e),
+                    };
+                }
+            };
+            let enabled = find_enabled(&eval);
+            if enabled.is_empty() {
+                let reason = eval_halt_reason(&eval);
+                return SimulateGraphResponse {
+                    state: req.state,
+                    time_series: None,
+                    enabled: vec![],
+                    fired: None,
+                    halted: true,
+                    halt_reason: Some(reason),
+                    error: None,
+                };
+            }
+            let t = pick_next(&enabled, req.last_fired);
+            let new_state = fire(&eval, t);
+            let mut eval2 = match make_evaluator(&new_state) {
+                Ok(e) => e,
+                Err(e) => {
+                    return SimulateGraphResponse {
+                        state: new_state,
+                        time_series: None,
+                        enabled: vec![],
+                        fired: Some(t),
+                        halted: true,
+                        halt_reason: None,
+                        error: Some(e),
+                    };
+                }
+            };
+            let new_enabled = find_enabled(&eval2);
+            let halted = new_enabled.is_empty();
+            let halt_reason = if halted {
+                Some(eval_halt_reason(&eval2))
+            } else {
+                None
+            };
+            SimulateGraphResponse {
+                state: new_state,
+                time_series: None,
+                enabled: new_enabled,
+                fired: Some(t),
+                halted,
+                halt_reason,
+                error: None,
+            }
+        }
+
+        SimulateAction::Run { max_steps } => {
+            let max = max_steps.unwrap_or(1000);
+            let mut state = req.state;
+            let mut eval = match make_evaluator(&state) {
+                Ok(e) => e,
+                Err(e) => {
+                    return SimulateGraphResponse {
+                        state,
+                        time_series: None,
+                        enabled: vec![],
+                        fired: None,
+                        halted: true,
+                        halt_reason: None,
+                        error: Some(e),
+                    };
+                }
+            };
+            let mut history: Vec<SimulateTimeSample> = Vec::new();
+            let mut halted = false;
+            let mut halt_reason = None;
+            let mut last = req.last_fired;
+
+            for step in 0..max {
+                let enabled = find_enabled(&eval);
+                if enabled.is_empty() {
+                    halted = true;
+                    halt_reason = Some(eval_halt_reason(&eval));
+                    break;
+                }
+                let t = pick_next(&enabled, last);
+                state = fire(&eval, t);
+                last = Some(t);
+                history.push(SimulateTimeSample {
+                    step,
+                    state: state.clone(),
+                    fired: Some(t),
+                });
+                if let Err(e) = update_state(&mut eval, &state) {
+                    return SimulateGraphResponse {
+                        state,
+                        time_series: Some(history),
+                        enabled: vec![],
+                        fired: None,
+                        halted: true,
+                        halt_reason: None,
+                        error: Some(e),
+                    };
+                }
+            }
+
+            if !halted && history.len() >= max {
+                halted = true;
+                halt_reason = Some("max_steps".to_string());
+            }
+
+            let enabled = find_enabled(&eval);
+            SimulateGraphResponse {
+                state,
+                time_series: Some(history),
+                enabled,
+                fired: None,
+                halted,
+                halt_reason,
+                error: None,
+            }
+        }
+    }
+}
+
+async fn simulate_graph_handler(
+    State(_state): State<Arc<AppState>>,
+    Json(req): Json<SimulateGraphRequest>,
+) -> impl IntoResponse {
+    let result = tokio::task::spawn_blocking(move || simulate_graph_core(req)).await;
+    match result {
+        Ok(resp) => Json(resp),
+        Err(e) => Json(SimulateGraphResponse {
+            state: vec![],
+            time_series: None,
+            enabled: vec![],
+            fired: None,
+            halted: true,
+            halt_reason: None,
+            error: Some(format!("Task panic: {}", e)),
+        }),
+    }
+}
+
+// =============================================================================
 // Tests for verify_graph
 // =============================================================================
 
@@ -3587,5 +4068,499 @@ mod verify_graph_tests {
             !parallel.unwrap().passed,
             "PARALLEL VOLTAGE SOURCES should fail when two vsources share both nets"
         );
+    }
+}
+
+// =============================================================================
+// Tests for simulate_graph
+// =============================================================================
+
+#[cfg(test)]
+mod simulate_graph_tests {
+    use super::*;
+
+    fn sim_comp(comp_type: &str, tokens: Option<i64>) -> VerifyGraphComponent {
+        let params = tokens.map(|t| {
+            let mut m = std::collections::HashMap::new();
+            m.insert("tokens".to_string(), serde_json::json!(t));
+            m
+        });
+        VerifyGraphComponent {
+            comp_type: comp_type.to_string(),
+            component_type: Some(comp_type.to_string()),
+            params,
+        }
+    }
+
+    /// Linear workflow: [Source(1)] -> |T0| -> [Place(0)] -> |T1| -> [Sink(0)]
+    ///
+    /// Net 0: Source(+1) -- T0(-1)
+    /// Net 1: T0(+1) -- Place(-1)
+    /// Net 2: Place(+1) -- T1(-1)
+    /// Net 3: T1(+1) -- Sink(-1)
+    fn linear_workflow() -> SimulateGraphRequest {
+        SimulateGraphRequest {
+            domain: "petri_net".to_string(),
+            components: vec![
+                sim_comp("SourcePlace", Some(1)), // c0
+                sim_comp("Transition", None),     // c1 = T0
+                sim_comp("Place", Some(0)),       // c2
+                sim_comp("Transition", None),     // c3 = T1
+                sim_comp("SinkPlace", Some(0)),   // c4
+            ],
+            incidence: VerifyGraphIncidence {
+                v: 4,
+                p: 5,
+                entries: vec![
+                    // Net 0: Source -> T0
+                    VerifyGraphEntry {
+                        net: 0,
+                        port: 0,
+                        value: 1,
+                    }, // Source port
+                    VerifyGraphEntry {
+                        net: 0,
+                        port: 1,
+                        value: -1,
+                    }, // T0 port
+                    // Net 1: T0 -> Place
+                    VerifyGraphEntry {
+                        net: 1,
+                        port: 1,
+                        value: 1,
+                    }, // T0 port
+                    VerifyGraphEntry {
+                        net: 1,
+                        port: 2,
+                        value: -1,
+                    }, // Place port
+                    // Net 2: Place -> T1
+                    VerifyGraphEntry {
+                        net: 2,
+                        port: 2,
+                        value: 1,
+                    }, // Place port
+                    VerifyGraphEntry {
+                        net: 2,
+                        port: 3,
+                        value: -1,
+                    }, // T1 port
+                    // Net 3: T1 -> Sink
+                    VerifyGraphEntry {
+                        net: 3,
+                        port: 3,
+                        value: 1,
+                    }, // T1 port
+                    VerifyGraphEntry {
+                        net: 3,
+                        port: 4,
+                        value: -1,
+                    }, // Sink port
+                ],
+            },
+            port_labels: vec![
+                "0:out".to_string(),
+                "1:in".to_string(),
+                "2:in".to_string(),
+                "3:in".to_string(),
+                "4:in".to_string(),
+            ],
+            state: vec![1.0, 0.0, 0.0, 0.0, 0.0],
+            action: SimulateAction::FindEnabled,
+            last_fired: None,
+        }
+    }
+
+    #[test]
+    fn find_enabled_linear_workflow() {
+        let req = linear_workflow();
+        let resp = simulate_graph_core(req);
+        assert!(resp.error.is_none(), "error: {:?}", resp.error);
+        assert_eq!(resp.enabled, vec![1], "only T0 should be enabled");
+    }
+
+    #[test]
+    fn step_fires_first_enabled() {
+        let mut req = linear_workflow();
+        req.action = SimulateAction::Step;
+        let resp = simulate_graph_core(req);
+        assert!(resp.error.is_none(), "error: {:?}", resp.error);
+        assert_eq!(resp.fired, Some(1), "T0 should fire");
+        assert_eq!(resp.state[0], 0.0, "source should lose token");
+        assert_eq!(resp.state[2], 1.0, "middle place should gain token");
+    }
+
+    #[test]
+    fn run_completes_linear_workflow() {
+        let mut req = linear_workflow();
+        req.action = SimulateAction::Run {
+            max_steps: Some(100),
+        };
+        let resp = simulate_graph_core(req);
+        assert!(resp.error.is_none(), "error: {:?}", resp.error);
+        assert!(resp.halted);
+        assert_eq!(
+            resp.halt_reason.as_deref(),
+            Some("completed"),
+            "should halt when token reaches sink"
+        );
+        assert_eq!(resp.state[4], 1.0, "sink should have the token");
+        assert_eq!(resp.state[0], 0.0, "source should be empty");
+        assert!(resp.time_series.is_some());
+        let history = resp.time_series.unwrap();
+        assert_eq!(history.len(), 2, "two firings: T0 then T1");
+    }
+
+    #[test]
+    fn reset_returns_client_provided_state() {
+        let mut req = linear_workflow();
+        // Client sends initial state (computed from stateParam metadata)
+        req.state = vec![1.0, 0.0, 0.0, 0.0, 0.0];
+        req.action = SimulateAction::Reset;
+        let resp = simulate_graph_core(req);
+        assert!(resp.error.is_none(), "error: {:?}", resp.error);
+        assert_eq!(resp.state[0], 1.0, "source should have initial token");
+        assert_eq!(resp.state[2], 0.0, "place should be empty");
+        assert!(
+            !resp.enabled.is_empty(),
+            "should detect enabled transitions"
+        );
+    }
+
+    #[test]
+    fn deadlock_detection() {
+        let mut req = linear_workflow();
+        req.state = vec![0.0, 0.0, 0.0, 0.0, 0.0]; // no tokens anywhere
+        req.action = SimulateAction::Step;
+        let resp = simulate_graph_core(req);
+        assert!(resp.halted);
+        assert_eq!(resp.halt_reason.as_deref(), Some("deadlock"));
+        assert!(resp.enabled.is_empty());
+    }
+
+    /// Mutex: two transitions compete for same token
+    /// [Place(1)] -> |T0| -> [Out0(0)]
+    /// [Place(1)] -> |T1| -> [Out1(0)]
+    /// (same source place feeds both transitions)
+    #[test]
+    fn mutex_only_one_fires() {
+        let req = SimulateGraphRequest {
+            domain: "petri_net".to_string(),
+            components: vec![
+                sim_comp("Place", Some(1)),   // c0 — shared resource
+                sim_comp("Transition", None), // c1 = T0
+                sim_comp("Transition", None), // c2 = T1
+                sim_comp("Place", Some(0)),   // c3 = Out0
+                sim_comp("Place", Some(0)),   // c4 = Out1
+            ],
+            incidence: VerifyGraphIncidence {
+                v: 4,
+                p: 5,
+                entries: vec![
+                    // Net 0: Place -> T0
+                    VerifyGraphEntry {
+                        net: 0,
+                        port: 0,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 0,
+                        port: 1,
+                        value: -1,
+                    },
+                    // Net 1: T0 -> Out0
+                    VerifyGraphEntry {
+                        net: 1,
+                        port: 1,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 1,
+                        port: 3,
+                        value: -1,
+                    },
+                    // Net 2: Place -> T1
+                    VerifyGraphEntry {
+                        net: 2,
+                        port: 0,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 2,
+                        port: 2,
+                        value: -1,
+                    },
+                    // Net 3: T1 -> Out1
+                    VerifyGraphEntry {
+                        net: 3,
+                        port: 2,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 3,
+                        port: 4,
+                        value: -1,
+                    },
+                ],
+            },
+            port_labels: vec![
+                "0:out".to_string(),
+                "1:in".to_string(),
+                "2:in".to_string(),
+                "3:in".to_string(),
+                "4:in".to_string(),
+            ],
+            state: vec![1.0, 0.0, 0.0, 0.0, 0.0],
+            action: SimulateAction::Run {
+                max_steps: Some(10),
+            },
+            last_fired: None,
+        };
+        let resp = simulate_graph_core(req);
+        assert!(resp.error.is_none(), "error: {:?}", resp.error);
+        // Only one transition should have fired (token consumed from shared place)
+        let total_out = resp.state[3] + resp.state[4];
+        assert_eq!(
+            total_out, 1.0,
+            "exactly one output place should have the token"
+        );
+        assert_eq!(resp.state[0], 0.0, "shared place should be empty");
+    }
+
+    #[test]
+    fn max_steps_halts_infinite_loop() {
+        // Self-loop: Place -> T -> Place (fires forever)
+        let req = SimulateGraphRequest {
+            domain: "petri_net".to_string(),
+            components: vec![
+                sim_comp("Place", Some(1)),   // c0
+                sim_comp("Transition", None), // c1
+            ],
+            incidence: VerifyGraphIncidence {
+                v: 2,
+                p: 2,
+                entries: vec![
+                    // Net 0: Place -> T
+                    VerifyGraphEntry {
+                        net: 0,
+                        port: 0,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 0,
+                        port: 1,
+                        value: -1,
+                    },
+                    // Net 1: T -> Place
+                    VerifyGraphEntry {
+                        net: 1,
+                        port: 1,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 1,
+                        port: 0,
+                        value: -1,
+                    },
+                ],
+            },
+            port_labels: vec!["0:out".to_string(), "1:in".to_string()],
+            state: vec![1.0, 0.0],
+            action: SimulateAction::Run { max_steps: Some(5) },
+            last_fired: None,
+        };
+        let resp = simulate_graph_core(req);
+        assert!(resp.error.is_none(), "error: {:?}", resp.error);
+        assert!(resp.halted);
+        assert_eq!(resp.halt_reason.as_deref(), Some("max_steps"));
+        assert!(resp.time_series.unwrap().len() == 5);
+    }
+
+    /// User's actual graph layout: transitions before places.
+    /// [Source(5)] -> |T0| -> [Place(0)] -> |T1| -> [Sink(0)]
+    ///
+    /// Component order (as placed in Graph Editor):
+    ///   c0 = T0, c1 = T1, c2 = Place, c3 = Source(5), c4 = Sink(0)
+    ///
+    /// Nets (port-level, 4 ports per component):
+    ///   n0: c0:right(+1) → c2:left(-1)    T0 outputs to Place
+    ///   n1: c2:right(+1) → c1:left(-1)    Place outputs to T1
+    ///   n2: c3:right(+1) → c0:left(-1)    Source outputs to T0
+    ///   n3: c1:right(+1) → c4:left(-1)    T1 outputs to Sink
+    fn user_layout_5() -> SimulateGraphRequest {
+        SimulateGraphRequest {
+            domain: "petri_net".to_string(),
+            components: vec![
+                sim_comp("Transition", None),     // c0 = T0
+                sim_comp("Transition", None),     // c1 = T1
+                sim_comp("Place", Some(0)),       // c2
+                sim_comp("SourcePlace", Some(5)), // c3
+                sim_comp("SinkPlace", Some(0)),   // c4
+            ],
+            incidence: VerifyGraphIncidence {
+                v: 4,
+                p: 20,
+                entries: vec![
+                    // n0: T0:right(port 1) +1, Place:left(port 11) -1
+                    VerifyGraphEntry {
+                        net: 0,
+                        port: 1,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 0,
+                        port: 11,
+                        value: -1,
+                    },
+                    // n1: Place:right(port 9) +1, T1:left(port 7) -1
+                    VerifyGraphEntry {
+                        net: 1,
+                        port: 9,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 1,
+                        port: 7,
+                        value: -1,
+                    },
+                    // n2: Source:right(port 13) +1, T0:left(port 3) -1
+                    VerifyGraphEntry {
+                        net: 2,
+                        port: 13,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 2,
+                        port: 3,
+                        value: -1,
+                    },
+                    // n3: T1:right(port 5) +1, Sink:left(port 19) -1
+                    VerifyGraphEntry {
+                        net: 3,
+                        port: 5,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 3,
+                        port: 19,
+                        value: -1,
+                    },
+                ],
+            },
+            port_labels: (0..5)
+                .flat_map(|ci| {
+                    ["top", "right", "bottom", "left"]
+                        .iter()
+                        .map(move |p| format!("{}:{}", ci, p))
+                })
+                .collect(),
+            state: vec![0.0, 0.0, 0.0, 5.0, 0.0],
+            action: SimulateAction::FindEnabled,
+            last_fired: None,
+        }
+    }
+
+    #[test]
+    fn user_layout_step_by_step_5_tokens() {
+        // Step through the entire simulation one step at a time,
+        // recording the full trace.
+        let base = user_layout_5();
+        let mut state = base.state.clone();
+        let mut trace: Vec<(usize, Vec<f64>)> = Vec::new(); // (fired, state_after)
+
+        for _ in 0..100 {
+            let req = SimulateGraphRequest {
+                state: state.clone(),
+                action: SimulateAction::Step,
+                ..user_layout_5()
+            };
+            let resp = simulate_graph_core(req);
+            assert!(resp.error.is_none(), "no error");
+
+            if resp.halted {
+                state = resp.state;
+                break;
+            }
+            let fired = resp.fired.expect("should fire something");
+            state = resp.state.clone();
+            trace.push((fired, state.clone()));
+        }
+
+        // Print trace for debugging
+        println!("=== Step-by-step trace (5 tokens) ===");
+        println!("Components: c0=T0, c1=T1, c2=Place, c3=Source, c4=Sink");
+        println!("Initial:    T0=0  T1=0  Place=0  Source=5  Sink=0");
+        for (i, (fired, st)) in trace.iter().enumerate() {
+            let name = match *fired {
+                0 => "T0",
+                1 => "T1",
+                _ => "?",
+            };
+            println!(
+                "Step {:2}: {} fired → T0={} T1={} Place={} Source={} Sink={}",
+                i + 1,
+                name,
+                st[0],
+                st[1],
+                st[2],
+                st[3],
+                st[4]
+            );
+        }
+        println!(
+            "Final: T0={} T1={} Place={} Source={} Sink={}",
+            state[0], state[1], state[2], state[3], state[4]
+        );
+
+        // Verify all tokens are accounted for (conservation)
+        let total: f64 = state.iter().sum();
+        assert_eq!(total, 5.0, "token conservation: sum must be 5");
+        assert!(state[4] > 0.0, "at least one token should reach sink");
+    }
+
+    #[test]
+    fn user_layout_run_5_tokens() {
+        // Run all at once — should produce identical final state
+        let mut req = user_layout_5();
+        req.action = SimulateAction::Run {
+            max_steps: Some(100),
+        };
+        let resp = simulate_graph_core(req);
+        assert!(resp.error.is_none());
+        assert!(resp.halted);
+
+        let state = &resp.state;
+        println!("=== Run trace (5 tokens) ===");
+        println!("Components: c0=T0, c1=T1, c2=Place, c3=Source, c4=Sink");
+        if let Some(ref ts) = resp.time_series {
+            for (i, sample) in ts.iter().enumerate() {
+                let fired_name = match sample.fired {
+                    Some(0) => "T0",
+                    Some(1) => "T1",
+                    _ => "?",
+                };
+                println!(
+                    "Step {:2}: {} → T0={} T1={} Place={} Source={} Sink={}",
+                    i + 1,
+                    fired_name,
+                    sample.state[0],
+                    sample.state[1],
+                    sample.state[2],
+                    sample.state[3],
+                    sample.state[4]
+                );
+            }
+        }
+        println!(
+            "Final: T0={} T1={} Place={} Source={} Sink={}",
+            state[0], state[1], state[2], state[3], state[4]
+        );
+        println!("Halt reason: {:?}", resp.halt_reason);
+        println!("Steps: {:?}", resp.time_series.as_ref().map(|v| v.len()));
+
+        let total: f64 = state.iter().sum();
+        assert_eq!(total, 5.0, "token conservation: sum must be 5");
+        assert!(state[4] > 0.0, "at least one token should reach sink");
+        assert_eq!(resp.halt_reason.as_deref(), Some("completed"));
     }
 }

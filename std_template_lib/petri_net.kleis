@@ -1,17 +1,25 @@
 // =============================================================================
-// Petri Net / Workflow Net Verification Theory
+// Petri Net / Workflow Net — Verification + Simulation Theory
 // =============================================================================
 //
-// Companion theory for petri_net.kleist — loaded by /api/verify_graph.
+// Companion theory for petri_net.kleist — loaded by /api/verify_graph
+// and /api/simulate_graph.
 //
-// The server provides ONLY generic graph primitives (domain-agnostic):
-//   graph_nc, graph_nn          — component/net counts
-//   graph_ctype(c)              — integer type code for component c
-//   graph_param(c, j)           — j-th parameter of component c
-//   graph_inc(net, comp)        — signed incidence (+1 source, -1 target)
-//   TYPE_X                      — type codes declared below
+// TWO PREAMBLE MODES:
 //
-// This theory derives ALL Petri-net semantics from those primitives.
+// 1. Verification preamble (Z3-backed):
+//      operation graph_nc : ℤ  +  axiom nc_val: graph_nc = 5
+//      Uses Z3 for symbolic ∀/∃ proofs in the example blocks.
+//
+// 2. Simulation preamble (eval_concrete):
+//      define sim_state = [5, 0, 0, 0, 0]
+//      define graph_nc_val = 5 / graph_nn_val = 4
+//      define graph_ctype_val(c) = nth([...], c)
+//      define graph_inc_val(n, c) = nth(nth([...], n), c)
+//      define TYPE_X = <integer>
+//      Uses eval_concrete for fast step-by-step execution.
+//
+// This theory derives ALL Petri-net semantics from graph primitives.
 // =============================================================================
 
 // Required type codes — preamble provides concrete integer values
@@ -62,3 +70,92 @@ example "SOURCE EXISTS: at least one source place" {
 example "SINK EXISTS: at least one sink place" {
     assert(∃(c : ℤ). c ≥ 0 ∧ c < graph_nc ∧ is_sink(c))
 }
+
+// =============================================================================
+// Simulation semantics — evaluated by eval_concrete
+// =============================================================================
+//
+// The sim preamble provides concrete defines:
+//   sim_state, graph_nc_val, graph_nn_val,
+//   graph_ctype_val(c), graph_inc_val(n, c), TYPE_X
+//
+// Interface contract (server calls these via eval_concrete):
+//   sim_enabled(t)     → true/false
+//   sim_fire(t, c)     → new state value for component c after firing t
+//   sim_halted()       → true/false
+//   sim_halt_reason()  → "completed" | "deadlock"
+// =============================================================================
+
+// Simulation uses concrete function variants (graph_ctype_val, graph_inc_val)
+// provided by the sim preamble as define statements with nth-based lookup.
+
+define sim_is_place(c) =
+    graph_ctype_val(c) = TYPE_Place ∨
+    graph_ctype_val(c) = TYPE_SourcePlace ∨
+    graph_ctype_val(c) = TYPE_SinkPlace
+
+define sim_is_transition(c) = graph_ctype_val(c) = TYPE_Transition
+
+define sim_is_sink(c) = graph_ctype_val(c) = TYPE_SinkPlace
+
+// Can place p satisfy transition t's input demand on net n?
+define sim_arc_ok(t, n, p) =
+    if graph_inc_val(n, p) > 0 ∧ sim_is_place(p) then
+        nth(sim_state, p) >= 0 - graph_inc_val(n, t)
+    else false
+
+// Recursive scan: does any place (counting down from p) satisfy the arc?
+define sim_net_has_source(t, n, p) =
+    if p < 0 then false
+    else if sim_arc_ok(t, n, p) then true
+    else sim_net_has_source(t, n, p - 1)
+
+// Is net n satisfied for transition t?
+define sim_net_satisfied(t, n) =
+    if graph_inc_val(n, t) >= 0 then true
+    else sim_net_has_source(t, n, graph_nc_val - 1)
+
+// Recursive scan: are all nets satisfied?
+define sim_all_nets_ok(t, n) =
+    if n < 0 then true
+    else if ¬sim_net_satisfied(t, n) then false
+    else sim_all_nets_ok(t, n - 1)
+
+define sim_enabled(t) =
+    sim_is_transition(t) ∧ sim_all_nets_ok(t, graph_nn_val - 1)
+
+// Token delta for place c on net n when transition t fires.
+// If t consumes from n (inc < 0) and c provides to n (inc > 0): c loses tokens.
+// If t produces to n (inc > 0) and c receives from n (inc < 0): c gains tokens.
+define sim_fire_delta_net(t, c, n) =
+    if sim_is_place(c) ∧ (
+        (graph_inc_val(n, t) < 0 ∧ graph_inc_val(n, c) > 0)
+        ∨ (graph_inc_val(n, t) > 0 ∧ graph_inc_val(n, c) < 0)
+    ) then graph_inc_val(n, t)
+    else 0
+
+// Sum deltas across all nets (recursive)
+define sim_fire_delta_sum(t, c, n) =
+    if n < 0 then 0
+    else sim_fire_delta_net(t, c, n) + sim_fire_delta_sum(t, c, n - 1)
+
+define sim_fire(t, c) =
+    nth(sim_state, c) + sim_fire_delta_sum(t, c, graph_nn_val - 1)
+
+// Halt detection: recursively check if any component is an enabled transition
+define sim_any_enabled_from(t) =
+    if t < 0 then false
+    else if sim_enabled(t) then true
+    else sim_any_enabled_from(t - 1)
+
+define sim_halted() = ¬sim_any_enabled_from(graph_nc_val - 1)
+
+// Halt reason: check if any sink has tokens
+define sim_any_sink_has_tokens(c) =
+    if c < 0 then false
+    else if sim_is_sink(c) ∧ nth(sim_state, c) > 0 then true
+    else sim_any_sink_has_tokens(c - 1)
+
+define sim_halt_reason() =
+    if sim_any_sink_has_tokens(graph_nc_val - 1) then "completed"
+    else "deadlock"

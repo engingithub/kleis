@@ -74,7 +74,7 @@ async function loadComponentDefs() {
                 if (meta[key]) domainConfig[key] = meta[key];
             }
             for (const key of Object.keys(meta)) {
-                if (key.startsWith('verify_')) domainConfig[key] = meta[key];
+                if (key.startsWith('verify_') || key.startsWith('sim_')) domainConfig[key] = meta[key];
             }
             continue;
         }
@@ -93,6 +93,9 @@ async function loadComponentDefs() {
             params: parseParams(meta.params),
             componentType: meta.component_type || null,
             causalityType: meta.causality_type || null,
+            showState: meta.show_state === 'true',
+            stateParam: meta.state_param || null,
+            stateStyle: meta.state_style || 'value',
         };
 
         if (!sectionMap[cat]) sectionMap[cat] = [];
@@ -133,6 +136,7 @@ const canvas = document.getElementById('graphCanvas');
 const canvasContainer = document.getElementById('canvasContainer');
 const componentsLayer = document.getElementById('componentsLayer');
 const wiresLayer = document.getElementById('wiresLayer');
+const simOverlayLayer = document.getElementById('simOverlayLayer');
 const previewLayer = document.getElementById('previewLayer');
 const palettePanel = document.getElementById('palettePanel');
 const outputContent = document.getElementById('outputContent');
@@ -496,6 +500,311 @@ function showVerifyResults(results, loading) {
     document.getElementById('verifyClose').addEventListener('click', () => {
         panel.classList.remove('visible');
     });
+}
+
+// ---------------------------------------------------------------------------
+// Simulation
+// ---------------------------------------------------------------------------
+
+const simState = {
+    active: false,
+    state: null,     // current state vector (f64 per component)
+    enabled: [],     // indices of active components (from server)
+    history: [],     // step history [{step, fired, name}]
+    stepCount: 0,
+    lastFired: null, // last fired component index (for round-robin)
+    playing: false,
+    playTimer: null,
+    speed: 2,        // steps per second (index into SPEED_STOPS)
+};
+
+const SPEED_STOPS = [1, 2, 5, 10, 30, 60];
+
+function getSimMode() {
+    return domainConfig.sim_mode || null;
+}
+
+function buildSimRequest(action) {
+    const components = graphState.components.map(c => ({
+        type: c.type,
+        component_type: COMPONENT_DEFS[c.type]?.componentType || null,
+        params: c.params || null,
+    }));
+
+    const incData = buildIncidenceData();
+
+    return {
+        domain: domainConfig.verify_theory || DOMAIN_FILTER || 'unknown',
+        components,
+        incidence: incData.incidence,
+        port_labels: incData.port_labels,
+        state: simState.state || graphState.components.map(c => {
+            const def = COMPONENT_DEFS[c.type];
+            const sp = def?.stateParam;
+            return sp && c.params?.[sp] != null ? Number(c.params[sp]) : 0;
+        }),
+        action,
+        last_fired: simState.lastFired,
+    };
+}
+
+function buildIncidenceData() {
+    const inc = buildIncidenceMatrixJS();
+    return {
+        incidence: { entries: inc.entries, v: inc.v, p: inc.p },
+        port_labels: inc.port_labels,
+    };
+}
+
+async function simulateStep() {
+    const req = buildSimRequest({ type: 'Step' });
+    try {
+        const resp = await fetch('/api/simulate_graph', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(req),
+        });
+        const data = await resp.json();
+        if (data.error) {
+            showSimStatus(`Error: ${data.error}`, 'halted');
+            return false;
+        }
+        simState.state = data.state;
+        simState.enabled = data.enabled;
+        simState.lastFired = data.fired ?? simState.lastFired;
+        simState.stepCount++;
+        if (data.fired != null) {
+            simState.history.push({
+                step: simState.stepCount,
+                fired: data.fired,
+                name: graphState.components[data.fired]?.type || `c${data.fired}`,
+            });
+        }
+        updateSimPanel();
+        renderStateOverlay();
+        highlightEnabled();
+        if (data.halted) {
+            showSimStatus(`Halted: ${data.halt_reason}`, 'halted');
+            return false;
+        }
+        return true;
+    } catch (e) {
+        showSimStatus(`Fetch error: ${e.message}`, 'halted');
+        return false;
+    }
+}
+
+function startPlayback() {
+    if (simState.playing) return;
+    simState.playing = true;
+    updatePlayButton();
+    const sps = SPEED_STOPS[simState.speed];
+    const interval = Math.round(1000 / sps);
+    showSimStatus(`Playing at ${sps} steps/sec`, 'running');
+    simState.playTimer = setInterval(async () => {
+        const ok = await simulateStep();
+        if (!ok) stopPlayback();
+    }, interval);
+}
+
+function stopPlayback() {
+    if (!simState.playing) return;
+    simState.playing = false;
+    if (simState.playTimer) {
+        clearInterval(simState.playTimer);
+        simState.playTimer = null;
+    }
+    updatePlayButton();
+    if (simState.enabled && simState.enabled.length > 0) {
+        showSimStatus(`Paused at step ${simState.stepCount}`, 'running');
+    }
+}
+
+function togglePlayback() {
+    if (simState.playing) {
+        stopPlayback();
+    } else {
+        startPlayback();
+    }
+}
+
+function setSimSpeed(idx) {
+    simState.speed = Math.max(0, Math.min(SPEED_STOPS.length - 1, idx));
+    const sps = SPEED_STOPS[simState.speed];
+    const label = document.getElementById('simSpeedLabel');
+    if (label) label.textContent = `${sps} sps`;
+    if (simState.playing) {
+        clearInterval(simState.playTimer);
+        const interval = Math.round(1000 / sps);
+        showSimStatus(`Playing at ${sps} steps/sec`, 'running');
+        simState.playTimer = setInterval(async () => {
+            const ok = await simulateStep();
+            if (!ok) stopPlayback();
+        }, interval);
+    }
+}
+
+function updatePlayButton() {
+    const btn = document.getElementById('simPlay');
+    if (btn) btn.textContent = simState.playing ? 'Pause' : 'Play';
+}
+
+async function simulateReset() {
+    // Compute fresh initial state from component params using stateParam metadata
+    const initState = graphState.components.map(c => {
+        const def = COMPONENT_DEFS[c.type];
+        const sp = def?.stateParam;
+        return sp && c.params?.[sp] != null ? Number(c.params[sp]) : 0;
+    });
+    const req = buildSimRequest({ type: 'Reset' });
+    req.state = initState;
+    try {
+        const resp = await fetch('/api/simulate_graph', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(req),
+        });
+        const data = await resp.json();
+        simState.state = data.state;
+        simState.enabled = data.enabled;
+        simState.lastFired = null;
+        simState.history = [];
+        simState.stepCount = 0;
+        updateSimPanel();
+        renderStateOverlay();
+        highlightEnabled();
+        showSimStatus('Reset to initial state', 'running');
+    } catch (e) {
+        showSimStatus(`Fetch error: ${e.message}`, 'halted');
+    }
+}
+
+function openSimPanel() {
+    simState.active = true;
+    // Initialize state from component params
+    simState.state = graphState.components.map(c => {
+        const def = COMPONENT_DEFS[c.type];
+        const sp = def?.stateParam;
+        return sp && c.params?.[sp] != null ? Number(c.params[sp]) : 0;
+    });
+    simState.history = [];
+    simState.stepCount = 0;
+    simState.enabled = [];
+
+    const panel = document.getElementById('simulatePanel');
+    if (!panel) return;
+
+    const initSps = SPEED_STOPS[simState.speed];
+    panel.innerHTML = `
+        <h3>Simulation</h3>
+        <div class="sim-controls">
+            <button id="simStep" title="Advance one step">Step</button>
+            <button id="simPlay" title="Play / Pause">Play</button>
+            <button id="simReset" title="Reset to initial state">Reset</button>
+            <button id="simClose" title="Close simulation">Close</button>
+        </div>
+        <div class="sim-speed">
+            <button id="simSpeedDown" title="Slower">&minus;</button>
+            <span id="simSpeedLabel">${initSps} sps</span>
+            <button id="simSpeedUp" title="Faster">+</button>
+        </div>
+        <div class="sim-status running" id="simStatus">Ready — click Step or Play</div>
+        <div class="sim-history" id="simHistory"></div>
+    `;
+    panel.classList.add('visible');
+
+    document.getElementById('simStep').addEventListener('click', () => { stopPlayback(); simulateStep(); });
+    document.getElementById('simPlay').addEventListener('click', togglePlayback);
+    document.getElementById('simReset').addEventListener('click', () => { stopPlayback(); simulateReset(); });
+    document.getElementById('simClose').addEventListener('click', closeSimPanel);
+    document.getElementById('simSpeedDown').addEventListener('click', () => setSimSpeed(simState.speed - 1));
+    document.getElementById('simSpeedUp').addEventListener('click', () => setSimSpeed(simState.speed + 1));
+
+    simulateReset();
+}
+
+function closeSimPanel() {
+    stopPlayback();
+    simState.active = false;
+    const panel = document.getElementById('simulatePanel');
+    if (panel) {
+        panel.classList.remove('visible');
+        panel.innerHTML = '';
+    }
+    clearStateOverlay();
+    clearEnabledHighlights();
+}
+
+function updateSimPanel() {
+    const historyEl = document.getElementById('simHistory');
+    if (!historyEl) return;
+    let html = '';
+    const recent = simState.history.slice(-20);
+    for (const h of recent) {
+        html += `<div class="sim-history-item">Step ${h.step}: <strong>${h.name}</strong></div>`;
+    }
+    if (simState.history.length > 20) {
+        html = `<div class="sim-history-item" style="color:#6c757d">... ${simState.history.length - 20} earlier steps</div>` + html;
+    }
+    historyEl.innerHTML = html;
+    historyEl.scrollTop = historyEl.scrollHeight;
+}
+
+function showSimStatus(msg, cls) {
+    const el = document.getElementById('simStatus');
+    if (el) {
+        el.textContent = msg;
+        el.className = `sim-status ${cls}`;
+    }
+}
+
+function renderStateOverlay() {
+    clearStateOverlay();
+    if (!simState.state) return;
+    for (let ci = 0; ci < graphState.components.length; ci++) {
+        const comp = graphState.components[ci];
+        const def = COMPONENT_DEFS[comp.type];
+        if (!def?.showState) continue;
+        const val = simState.state[ci] || 0;
+        if (val === 0) continue;
+
+        const { w, h } = getComponentSize(comp);
+        const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        label.setAttribute('class', 'sim-state-label');
+        label.setAttribute('x', comp.x + w / 2);
+        label.setAttribute('y', comp.y + h / 2 + 5);
+        label.setAttribute('text-anchor', 'middle');
+        label.setAttribute('font-size', '14');
+        label.setAttribute('font-weight', 'bold');
+        label.setAttribute('fill', '#dc3545');
+
+        if (def.stateStyle === 'dots') {
+            const n = Math.round(val);
+            label.textContent = n <= 5 ? '\u25CF'.repeat(n) : String(n);
+        } else {
+            label.textContent = Number.isInteger(val) ? String(val) : val.toFixed(2);
+        }
+        simOverlayLayer.appendChild(label);
+    }
+}
+
+function clearStateOverlay() {
+    simOverlayLayer.innerHTML = '';
+}
+
+function highlightEnabled() {
+    clearEnabledHighlights();
+    if (!simState.enabled) return;
+    for (const ci of simState.enabled) {
+        const g = document.querySelector(`[data-comp-index="${ci}"]`);
+        if (g) {
+            g.classList.add('sim-enabled');
+        }
+    }
+}
+
+function clearEnabledHighlights() {
+    document.querySelectorAll('.sim-enabled').forEach(el => el.classList.remove('sim-enabled'));
 }
 
 // ---------------------------------------------------------------------------
@@ -1098,13 +1407,15 @@ function renderAll() {
 
 function renderComponents() {
     componentsLayer.innerHTML = '';
-    for (const comp of graphState.components) {
+    for (let ci = 0; ci < graphState.components.length; ci++) {
+        const comp = graphState.components[ci];
         const def = COMPONENT_DEFS[comp.type];
         const rot = comp.rotation || 0;
         const { w, h } = getComponentSize(comp);
         const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
         g.setAttribute('class', 'component-group' + (comp.id === selectedComponentId ? ' selected' : ''));
         g.setAttribute('data-id', comp.id);
+        g.setAttribute('data-comp-index', ci);
         g.setAttribute('transform', `translate(${comp.x}, ${comp.y})`);
 
         const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
@@ -1671,6 +1982,8 @@ if (btnCleanWires) btnCleanWires.addEventListener('click', autoRouteAllNets);
 const btnVerify = document.getElementById('btnVerify');
 if (btnVerify) btnVerify.addEventListener('click', verifyGraph);
 
+// Simulate button is wired in initApp() after loadComponentDefs() populates domainConfig
+
 document.getElementById('btnZoomIn').addEventListener('click', () => {
     const rect = canvasContainer.getBoundingClientRect();
     zoomAtPoint(rect.left + rect.width / 2, rect.top + rect.height / 2, viewState.zoom + ZOOM_STEP);
@@ -1991,6 +2304,15 @@ function copyTypstToClipboard() {
 (async function initApp() {
     statusBar.textContent = 'Loading component definitions...';
     await loadComponentDefs();
+
+    const btnSimulate = document.getElementById('btnSimulate');
+    if (btnSimulate) {
+        if (getSimMode()) {
+            btnSimulate.addEventListener('click', openSimPanel);
+        } else {
+            btnSimulate.style.display = 'none';
+        }
+    }
 
     if (DOMAIN_FILTER) {
         const label = DOMAIN_FILTER.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
