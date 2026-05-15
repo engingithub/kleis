@@ -2284,17 +2284,23 @@ fn build_graph_preamble(req: &VerifyGraphRequest, theory_source: &str) -> String
         }
     }
 
-    // Scan theory for TYPE_X references and assign unused codes to absent types.
-    // This ensures every TYPE constant the theory references gets a concrete value
-    // (code 0 = "absent type" won't match any component since codes start at 1).
-    for cap in theory_source.split("TYPE_").skip(1) {
-        let name: String = cap
-            .chars()
-            .take_while(|c| c.is_alphanumeric() || *c == '_')
-            .collect();
-        if !name.is_empty() && !type_map.contains_key(&name) {
-            type_map.insert(name, next_code);
-            next_code += 1;
+    // Parse theory to discover declared TYPE_X operations.
+    // Theories explicitly declare their required type codes as:
+    //   operation TYPE_Foo : ℤ
+    // This replaces the old text-scanning approach with AST-based extraction.
+    let mut theory_declared_types: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
+    if let Ok(theory_program) = kleis::kleis_parser::parse_kleis_program(theory_source) {
+        for op in theory_program.operations() {
+            if let Some(suffix) = op.name.strip_prefix("TYPE_") {
+                if !suffix.is_empty() {
+                    theory_declared_types.insert(suffix.to_string());
+                    if !type_map.contains_key(suffix) {
+                        type_map.insert(suffix.to_string(), next_code);
+                        next_code += 1;
+                    }
+                }
+            }
         }
     }
 
@@ -2326,11 +2332,20 @@ fn build_graph_preamble(req: &VerifyGraphRequest, theory_source: &str) -> String
     preamble.push_str("operation graph_inc : ℤ × ℤ → ℤ\n");
     preamble.push_str("\n");
 
-    // -- Type code constants (one per unique component_type)
-    preamble.push_str("// Type codes — theory uses these to identify component roles\n");
-    for (name, &code) in &type_map {
-        let safe_name = name.replace(' ', "_");
-        preamble.push_str(&format!("operation TYPE_{safe_name} : ℤ\n"));
+    // Emit operation declarations only for TYPE_X not declared by the theory.
+    // The theory declares its own TYPE_X operations; the preamble fills in any
+    // extras that appear in the request's component_type values.
+    let undeclared: Vec<_> = type_map
+        .keys()
+        .filter(|name| !theory_declared_types.contains(name.as_str()))
+        .cloned()
+        .collect();
+    if !undeclared.is_empty() {
+        preamble.push_str("// Extra type codes from request (not declared in theory)\n");
+        for name in &undeclared {
+            let safe_name = name.replace(' ', "_");
+            preamble.push_str(&format!("operation TYPE_{safe_name} : ℤ\n"));
+        }
     }
     preamble.push_str("\n");
 
@@ -3235,6 +3250,28 @@ mod verify_graph_tests {
             "missing TYPE_Junction1"
         );
         assert!(preamble.contains("TYPE_Resistor"), "missing TYPE_Resistor");
+    }
+
+    #[test]
+    fn preamble_skips_theory_declared_type_operations() {
+        let theory = "operation TYPE_Resistor : ℤ\noperation TYPE_Junction1 : ℤ\n";
+        let preamble = build_graph_preamble(&bond_graph_simple_se_r(), theory);
+        assert!(
+            preamble.contains("axiom type_Resistor"),
+            "should still emit axiom for Resistor"
+        );
+        assert!(
+            !preamble.contains("operation TYPE_Resistor"),
+            "should NOT re-declare theory-declared TYPE_Resistor"
+        );
+        assert!(
+            !preamble.contains("operation TYPE_Junction1"),
+            "should NOT re-declare theory-declared TYPE_Junction1"
+        );
+        assert!(
+            preamble.contains("operation TYPE_EffortSource"),
+            "should declare EffortSource (not in theory)"
+        );
     }
 
     #[test]

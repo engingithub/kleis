@@ -9,10 +9,16 @@
 //   graph_ctype(c)              — integer type code for component c
 //   graph_param(c, j)           — j-th parameter of component c
 //   graph_inc(net, comp)        — signed incidence (+1 source, -1 target)
-//   TYPE_Place, TYPE_SourcePlace, TYPE_SinkPlace, TYPE_Transition — type codes
+//   TYPE_X                      — type codes declared below
 //
 // This theory derives ALL Petri-net semantics from those primitives.
 // =============================================================================
+
+// Required type codes — preamble provides concrete integer values
+operation TYPE_Place : ℤ
+operation TYPE_SourcePlace : ℤ
+operation TYPE_SinkPlace : ℤ
+operation TYPE_Transition : ℤ
 
 // Petri-net domain interpretation of generic graph data
 

@@ -9,7 +9,7 @@
 //   graph_ctype(c)              — integer type code for component c
 //   graph_param(c, j)           — j-th parameter of component c
 //   graph_inc(net, comp)        — signed incidence (+1 source, -1 target)
-//   TYPE_X                      — type codes (auto-discovered from this file)
+//   TYPE_X                      — type codes declared below
 //
 // Electronics component types:
 //   VoltageSource — effort source (dc_voltage, ac_voltage)
@@ -20,6 +20,15 @@
 //   Connector     — wire junction, no-connect, terminal
 //   Measurement   — oscilloscope, multimeter
 // =============================================================================
+
+// Required type codes — preamble provides concrete integer values
+operation TYPE_VoltageSource : ℤ
+operation TYPE_CurrentSource : ℤ
+operation TYPE_Ground : ℤ
+operation TYPE_Passive : ℤ
+operation TYPE_Active : ℤ
+operation TYPE_Connector : ℤ
+operation TYPE_Measurement : ℤ
 
 // Domain interpretation of generic graph data
 

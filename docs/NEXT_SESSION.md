@@ -984,6 +984,33 @@ data model (EditorNode AST), domain data (`.kleist`/`.kleis`), and server APIs.
   concrete use case that motivates adding graph reachability to the Kleis
   evaluator as a built-in, not a domain-specific workaround.
 
+  **Theory interface declarations — replace text scanning with explicit structure declarations:**
+
+  Currently `build_graph_preamble` scans the `.kleis` theory source text for
+  `TYPE_X` string patterns to discover what the theory needs. This is a hack.
+  The theory should explicitly declare its requirements as a structure with
+  operations but no axioms (an interface/trait):
+
+  ```kleis
+  structure BondGraphTypes {
+      operation TYPE_EffortSource : ℤ
+      operation TYPE_FlowSource : ℤ
+      operation TYPE_Resistor : ℤ
+      // ...
+  }
+  ```
+
+  The preamble generator would then read parsed structure declarations instead
+  of scanning text, and emit `structure GraphData extends BondGraphTypes { ... }`
+  with concrete axioms. This makes the verification pipeline type-safe — the
+  Kleis parser catches a theory that references `TYPE_Foo` without declaring it,
+  instead of Z3 silently treating it as unconstrained.
+
+  Kleis already has structures with operations and axioms. The missing pieces:
+  1. A structure with operations but no axioms = interface/trait
+  2. `extends` or `implements` = providing axioms for declared operations
+  3. Preamble generator reads parsed AST instead of scanning text
+
   **Key insight: reachability is a matrix rank condition, not a graph traversal.**
   A short circuit exists iff the connector-only submatrix of `graph_inc` has a
   rank deficiency that places both terminals of a voltage source in the same
@@ -1009,6 +1036,30 @@ data model (EditorNode AST), domain data (`.kleist`/`.kleis`), and server APIs.
   time; users can't manually adjust trunk segments
 - **Graph ↔ Equation composition** — can graphs contain equations? Can equations
   embed graphs? Needs design work.
+
+  **Key insight: equations inside components shift verification from structural to behavioral.**
+  Currently `component_type` is ground truth for SCAP causality and conflict checks.
+  Once users can write constitutive equations inside components (e.g., `e = R * f`
+  for a resistor, `e = V_0` for a source), the equation becomes the actual ground
+  truth and `component_type` becomes a *claim* that the equation must satisfy.
+
+  The equation determines three properties the structural checks currently assume:
+  1. **Passivity**: Does `e * f ≥ 0` always hold? (energy dissipation)
+  2. **Causality**: Does the equation impose effort, impose flow, or accept either?
+  3. **Linearity**: Is the equation affine in port variables?
+
+  A nonlinear passive element (e.g., `e = R*f + k*f³`) is fine — still dissipates
+  energy, still indifferent causality. But a regime-switching hybrid (e.g.,
+  `e = V₀*sin(t)` when `f > 0`, `e = R*f` otherwise) acts as a source in some
+  regimes and a resistor in others, breaking SCAP's assumption of fixed roles.
+
+  Z3 can verify these properties: assert `∀(f : ℝ). e(f) * f ≥ 0` for passivity,
+  and Z3 either proves it or finds a counterexample regime. The incidence matrix
+  gives topology, the equations give physics, Z3 checks consistency between them.
+
+  This is the natural progression: structural verification (Phase 7) → behavioral
+  verification (equations) → simulation (ODE solver). Each layer adds constraints
+  that the previous layer assumed.
 - **Oscilloscope** — live WASM-powered oscilloscope as a graph component. The ODE
   solver runs client-side; connecting to a net shows real-time waveforms. This is
   a major UX win that only works because of the Rust/WASM architecture.

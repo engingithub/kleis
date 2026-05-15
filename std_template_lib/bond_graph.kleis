@@ -9,7 +9,7 @@
 //   graph_ctype(c)              — integer type code for component c
 //   graph_param(c, j)           — j-th parameter of component c
 //   graph_inc(net, comp)        — signed incidence (+1 source, -1 target)
-//   TYPE_X                      — type codes (auto-discovered from this file)
+//   TYPE_X                      — type codes declared below
 //
 // Bond graph elements and their SCAP causality categories:
 //   Se (EffortSource)  — fixed effort out
@@ -22,6 +22,17 @@
 //   0  (Junction0)     — common effort: exactly one bond brings in effort
 //   1  (Junction1)     — common flow: exactly one bond brings in flow
 // =============================================================================
+
+// Required type codes — preamble provides concrete integer values
+operation TYPE_EffortSource : ℤ
+operation TYPE_FlowSource : ℤ
+operation TYPE_Resistor : ℤ
+operation TYPE_Capacitor : ℤ
+operation TYPE_Inertia : ℤ
+operation TYPE_Transformer : ℤ
+operation TYPE_Gyrator : ℤ
+operation TYPE_Junction0 : ℤ
+operation TYPE_Junction1 : ℤ
 
 // Domain interpretation of generic graph data
 

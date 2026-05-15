@@ -1,7 +1,7 @@
 # ADR-037: Graph Editor with Domain-Agnostic Routing and Verification
 
-**Status:** Accepted & Implemented (Phases 1–5)
-**Date:** 2026-04-27 (original), 2026-05-14 (updated)
+**Status:** Accepted & Implemented (Phases 1–7)
+**Date:** 2026-04-27 (original), 2026-05-14 (Phase 7 + theory declarations)
 **Relates to:** ADR-005 (Visual Authoring), ADR-022 (Z3 Integration), ADR-023
 (Template Externalization), ADR-035 (Multi-Domain Template Compiler), ADR-036
 (Multi-Domain Template Generality)
@@ -243,9 +243,6 @@ operation graph_param : ℤ × ℤ → ℤ  // (component, param_index) → valu
 
 // Component-level incidence matrix (aggregated from port-level)
 operation graph_inc : ℤ × ℤ → ℤ    // (net, component) → signed value
-
-// Type code constants (one per unique component_type string)
-operation TYPE_X : ℤ            // e.g., TYPE_Place, TYPE_Transition
 ```
 
 The preamble emits a `GraphData` structure with:
@@ -258,23 +255,85 @@ The preamble emits a `GraphData` structure with:
 - **Distinctness axioms** for all TYPE codes (preventing Z3 from equating
   different component roles)
 
-**Theory scanning for absent types:** The preamble scans the companion theory
-text for `TYPE_X` references and assigns unused codes to any types the theory
-needs but the graph doesn't contain. This ensures every TYPE constant gets a
-concrete value. For absent types, the assigned code won't match any actual
-component (codes start at 1 for present types; absent types get higher codes
-that no component has). This is fully domain-agnostic — it's string scanning,
-not domain interpretation.
+**Theory-declared type codes:** TYPE codes (e.g., `TYPE_Place`,
+`TYPE_Resistor`) are **declared by the companion `.kleis` theory**, not by the
+server. The theory uses standard Kleis `operation` declarations:
+
+```kleis
+// In petri_net.kleis — the theory declares its own requirements
+operation TYPE_Place : ℤ
+operation TYPE_SourcePlace : ℤ
+operation TYPE_SinkPlace : ℤ
+operation TYPE_Transition : ℤ
+```
+
+The preamble generator **parses the theory** as a Kleis program, extracts all
+`OperationDecl` items whose name starts with `TYPE_`, and assigns each a unique
+integer code. This is AST-based extraction, not text scanning — only properly
+parsed `operation` declarations are recognized:
+
+```rust
+if let Ok(theory_program) = parse_kleis_program(theory_source) {
+    for op in theory_program.operations() {
+        if let Some(suffix) = op.name.strip_prefix("TYPE_") { ... }
+    }
+}
+```
+
+The preamble then provides **axiom values** for each TYPE code inside the
+`GraphData` structure, without re-declaring the operations (the theory already
+declared them):
+
+```kleis
+structure GraphData {
+    axiom type_Place: TYPE_Place = 1
+    axiom type_Transition: TYPE_Transition = 2
+    // ...
+}
+```
+
+**Type code assignment rules:**
+
+1. Types present in the graph's components are assigned codes 1, 2, 3, ...
+   (in insertion order)
+2. Types declared by the theory but absent from the graph are assigned higher
+   codes that no component has — this ensures Z3 doesn't confuse an absent type
+   with a present one
+3. If a component in the request has a type the theory didn't declare, the
+   preamble emits an `operation TYPE_X : ℤ` declaration for it (fallback for
+   forward compatibility)
+
+This architecture means the **theory is the contract**: it declares exactly what
+type codes it expects, the preamble fills in the values, and Z3 enforces
+consistency. A theory that references `TYPE_Foo` without declaring it will
+produce a parse error, not a silent Z3 misinterpretation.
 
 ### 8. Companion Theory Files
 
 Each domain's verification logic lives entirely in a companion `.kleis` file.
-The theory interprets the generic graph primitives in domain-specific terms.
+The theory has three layers:
+
+**Layer 1 — Type declarations:** The theory declares the type codes it requires
+from the preamble. These are `operation` declarations with no axioms — the
+preamble provides concrete values at verification time.
+
+**Layer 2 — Domain interpretation:** `define` statements map generic graph
+primitives to domain concepts. These are pure abbreviations — no Z3 cost.
+
+**Layer 3 — Verification assertions:** `example` blocks express properties that
+Z3 must prove from the graph data. Each example is a named, independently
+checked assertion.
 
 Example — `std_template_lib/petri_net.kleis`:
 
 ```kleis
-// Domain interpretation of generic graph data
+// Layer 1: type declarations (preamble fills in values)
+operation TYPE_Place : ℤ
+operation TYPE_SourcePlace : ℤ
+operation TYPE_SinkPlace : ℤ
+operation TYPE_Transition : ℤ
+
+// Layer 2: domain interpretation of generic graph primitives
 define is_place(c) =
     graph_ctype(c) = TYPE_Place ∨
     graph_ctype(c) = TYPE_SourcePlace ∨
@@ -283,7 +342,7 @@ define is_place(c) =
 define is_transition(c) = graph_ctype(c) = TYPE_Transition
 define tokens(c) = graph_param(c, 0)
 
-// Structural verification via Z3
+// Layer 3: structural verification via Z3
 example "INITIAL MARKING: some component has tokens" {
     assert(∃(c : ℤ). c ≥ 0 ∧ c < graph_nc ∧ is_place(c) ∧ tokens(c) ≥ 1)
 }
@@ -298,19 +357,120 @@ example "BIPARTITE: every arc crosses place/transition boundary" {
 }
 ```
 
+The three layers form a clear contract:
+
+| Layer | What it says | Who provides it |
+|-------|-------------|-----------------|
+| Type declarations | "I need `TYPE_Place`, `TYPE_Transition`, ..." | Theory declares, preamble fills values |
+| Domain interpretation | "`is_place(c)` means `graph_ctype(c) = TYPE_Place ∨ ...`" | Theory defines |
+| Verification assertions | "Every arc must cross a place/transition boundary" | Theory asserts, Z3 proves |
+
 **Adding verification for a new domain** requires only writing a companion
-`.kleis` file that maps generic primitives to domain semantics. No Rust changes.
+`.kleis` file that follows this three-layer pattern. No Rust changes, no
+JavaScript changes.
 
-### 9. Future Domain Support Without Code Changes
+### 9. Shared Primitives Across Theories
 
-New domains require only:
+All companion theories share the same set of preamble-provided primitives:
 
-1. A `.kleist` file with component templates (SVGs, ports, metadata, params)
-2. A `@template __domain_<name>` block declaring routing/verify preferences
-3. SVG assets in `static/svg/<domain>/`
-4. *(Optional)* A companion `.kleis` theory for Z3 verification
+| Primitive | Type | Meaning |
+|-----------|------|---------|
+| `graph_nc` | `ℤ` | Number of components |
+| `graph_nn` | `ℤ` | Number of nets |
+| `graph_ctype(c)` | `ℤ → ℤ` | Type code for component `c` |
+| `graph_param(c, j)` | `ℤ × ℤ → ℤ` | j-th parameter of component `c` |
+| `graph_inc(n, c)` | `ℤ × ℤ → ℤ` | Incidence matrix entry (net `n`, component `c`) |
 
-No JavaScript, no Rust, no recompilation.
+These primitives are always available. Domain-specific type codes (`TYPE_X`) are
+declared by each theory and filled by the preamble. This means theories are
+composable in principle — a theory that imports another can reuse its type
+declarations and domain definitions.
+
+### 10. How to Add a New Graph Domain
+
+Adding a new domain to the Graph Editor requires **only data files** — no Rust,
+no JavaScript, no recompilation. The following steps are sufficient:
+
+#### Step 1: Create SVG assets
+
+Place component SVG files in `static/svg/<domain>/`. Each SVG should be a clean
+symbol with consistent viewBox dimensions. The SVG filename must match the
+template name.
+
+#### Step 2: Create the `.kleist` template file
+
+Create `std_template_lib/<domain>.kleist` with:
+
+**a) Domain configuration block** — declares routing and verification behavior:
+
+```kleist
+@template __domain_<name> {
+    pattern: "__domain_<name>()"
+    category: "__domain"
+    routing_mode: "orthogonal"       // or "direct", "curved"
+    junction_style: "dot"            // or "none", "bar"
+    multi_port_strategy: "trunk_branch"  // or "star", "bus"
+    edge_decoration: "none"          // or "arrow", "half_arrow", "inhibitor"
+    edge_direction: "undirected"     // or "directed"
+    verify_no_isolated: "true"       // generic structural checks
+    verify_theory: "<domain>"        // enables Z3 verification
+}
+```
+
+**b) Component templates** — one per component type, with ports and metadata:
+
+```kleist
+@template my_component {
+    pattern: "my_component()"
+    category: "<domain>_<group>"
+    svg: "/static/svg/<domain>/my_component.svg"
+    ports: "in:left:0:50,out:right:100:50"
+    component_type: "MyType"
+    params: "value:real:100"
+    typst: "#my_typst_rendering()"
+}
+```
+
+Port format: `"name:side:x:y"` (comma-separated, coordinates relative to SVG).
+Params format: `"name:type:default"` (comma-separated for multiple).
+
+#### Step 3: (Optional) Create a companion `.kleis` theory
+
+Create `std_template_lib/<domain>.kleis` following the three-layer pattern:
+
+```kleis
+// Layer 1: declare required type codes
+operation TYPE_MyType : ℤ
+operation TYPE_OtherType : ℤ
+
+// Layer 2: domain interpretation
+define is_my_type(c) = graph_ctype(c) = TYPE_MyType
+
+// Layer 3: verification assertions
+example "MY CHECK: at least one MyType component" {
+    assert(∃(c : ℤ). c ≥ 0 ∧ c < graph_nc ∧ is_my_type(c))
+}
+```
+
+**The `component_type` values in `.kleist` must match the TYPE declaration
+suffixes in `.kleis`.** If a template has `component_type: "Resistor"`, the
+theory must declare `operation TYPE_Resistor : ℤ`.
+
+#### Step 4: Test
+
+Open `http://localhost:3000/static/graph_editor.html?domain=<domain>`. The
+palette should show component categories, components should be placeable, and
+the VERIFY button should run both structural and Z3 checks.
+
+#### Summary of files
+
+| File | Purpose |
+|------|---------|
+| `static/svg/<domain>/*.svg` | Component artwork |
+| `std_template_lib/<domain>.kleist` | Templates, ports, domain config |
+| `std_template_lib/<domain>.kleis` | Verification theory (optional) |
+
+No other files need to be created or modified.
 
 ## Implementation Status
 
@@ -366,19 +526,42 @@ No JavaScript, no Rust, no recompilation.
   domain-agnostic preamble generation and companion theory evaluation
 - **Domain-agnostic preamble**: `build_graph_preamble()` emits generic graph
   primitives (counts, type codes, params, incidence, closed-world axioms)
-- **Theory scanning**: preamble scans theory text for `TYPE_X` references to
-  assign codes to absent types
+- **Theory type extraction**: preamble parses companion theory AST to discover
+  declared `TYPE_X` operations and assign integer codes
 - **Companion theory**: `petri_net.kleis` derives domain semantics entirely from
   generic primitives
 - **23 tests** covering preamble structure, Z3 verification (pass and fail
   cases), missing theories, and multi-domain scenarios
 
-### Phase 6 (Planned): Extended Verification
+### Phase 6 (Partial): Extended Verification
 
-- Token visualization in Petri net places
-- Arc weight support (weighted edges in incidence matrix)
-- Companion theories for electronics and bond graph domains
-- Simulation integration with existing ODE solver
+- Token visualization in Petri net places — **not yet implemented**
+- Arc weight support (weighted edges in incidence matrix) — **not yet implemented**
+- ~~Companion theories for electronics and bond graph domains~~ — **done in Phase 7**
+- Simulation integration with existing ODE solver — **not yet implemented**
+
+### Phase 7 (Implemented): Causal Network Verification Theories
+
+- **Bond graph companion theory** (`std_template_lib/bond_graph.kleis`):
+  9 type codes (EffortSource, FlowSource, Resistor, Capacitor, Inertia,
+  Transformer, Gyrator, Junction0, Junction1), 7 Z3 assertions covering
+  source existence, 1-port existence, effort/flow conflict on junctions,
+  port connectivity, and junction connectivity
+- **Electronics companion theory** (`std_template_lib/electronics.kleis`):
+  7 type codes (VoltageSource, CurrentSource, Ground, Passive, Active,
+  Connector, Measurement), 5 Z3 assertions covering ground existence, source
+  existence, load existence, parallel voltage source detection, and series
+  current source detection
+- **Refined `component_type` values** in `.kleist` templates: split generic
+  "Source" into domain-specific types (e.g., `EffortSource` vs `FlowSource`
+  for bond graphs; `VoltageSource` vs `CurrentSource` for electronics)
+- **Explicit type declarations**: theory files declare `operation TYPE_X : ℤ`
+  for every type they reference; preamble extracts these from the parsed AST
+  instead of scanning theory text
+- **Always-run Z3 verification**: client-side `verifyGraph()` no longer
+  short-circuits — Z3 checks run even when structural checks fail
+- **33 Rust tests** covering preamble structure, Z3 verification (pass and
+  fail cases), theory loading, and the new type declaration extraction
 
 ### WASM Status
 
@@ -408,9 +591,12 @@ computationally intensive operations (e.g., large graph layout, ODE simulation).
    code. All domain semantics live in `.kleis` theory files, interpreted by Z3.
 7. **Closed-world axioms prevent Z3 exploitation.** The preamble constrains all
    uninterpreted functions so Z3 cannot invent values for unconstrained inputs.
-8. **Theory scanning bridges preamble and theory.** Types referenced by the
-   theory but absent from the graph get assigned concrete unused codes, preventing
-   Z3 from equating undefined TYPE constants with existing ones.
+8. **Theory declarations bridge preamble and theory.** Theories explicitly
+   declare their required type codes as `operation TYPE_X : ℤ`. The preamble
+   extracts these from the parsed AST and assigns concrete values. Types
+   referenced by the theory but absent from the graph get unused codes,
+   preventing Z3 from equating undefined TYPE constants with existing ones.
+   The contract is explicit and parser-checked.
 
 ### Negative
 
@@ -433,9 +619,10 @@ computationally intensive operations (e.g., large graph layout, ODE simulation).
    recognize a first-class `@graph_domain` block.
 2. **Pan/zoom uses SVG `viewBox`**, which is performant and well-supported but
    limits future layering (e.g., HTML overlays would not pan with the SVG).
-3. **Theory scanning is string-based.** It finds `TYPE_X` patterns via simple
-   text splitting, not AST analysis. This is fragile if `TYPE_` appears in
-   comments or strings, but sufficient for the current use case.
+3. ~~Theory scanning is string-based.~~ **Resolved.** Type discovery now uses
+   AST extraction via `parse_kleis_program()`. Theories explicitly declare
+   `operation TYPE_X : ℤ`; the preamble reads parsed `OperationDecl` items.
+   Comments and strings are no longer a concern.
 
 ## Files
 
@@ -444,10 +631,17 @@ computationally intensive operations (e.g., large graph layout, ODE simulation).
 | `static/graph_editor.html` | Graph Editor HTML structure |
 | `static/js/graphEditorMain.js` | Core editor logic: interaction, routing, rendering, verification |
 | `src/bin/server.rs` | `/api/verify_graph` endpoint, domain-agnostic preamble generator |
+| **Template files (`.kleist`)** | |
 | `std_template_lib/electronics.kleist` | Electronics templates + `__domain_electronics` config |
 | `std_template_lib/bond_graph.kleist` | Bond graph templates + `__domain_bond_graph` config |
 | `std_template_lib/petri_net.kleist` | Petri net templates + `__domain_petri_net` config |
-| `std_template_lib/petri_net.kleis` | Petri net companion theory (Z3 verification) |
+| `std_template_lib/graph_theory.kleist` | Abstract graph theory templates + `__domain_graph_theory` config |
+| **Companion theories (`.kleis`)** | |
+| `std_template_lib/electronics.kleis` | Electronics verification (KVL/KCL structural checks) |
+| `std_template_lib/bond_graph.kleis` | Bond graph verification (SCAP structural checks) |
+| `std_template_lib/petri_net.kleis` | Petri net verification (bipartiteness, marking, reachability) |
+| `std_template_lib/graph_theory.kleis` | Abstract graph theory (degree parity, Eulerian path) |
+| **SVG assets** | |
 | `static/svg/electronics/` | SVG assets for electronic components |
 | `static/svg/bond_graph/` | SVG assets for bond graph elements |
 | `static/svg/petri_net/` | SVG assets for Petri net elements |

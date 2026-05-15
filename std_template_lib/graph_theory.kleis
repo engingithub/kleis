@@ -8,11 +8,14 @@
 //   graph_nc, graph_nn          — node/edge counts
 //   graph_ctype(c)              — integer type code for component c
 //   graph_inc(net, comp)        — signed incidence (+1 or -1 = connected)
-//   TYPE_Node                   — type code for graph nodes
+//   TYPE_X                      — type codes declared below
 //
 // This theory verifies structural graph properties.
 // Classic test case: Euler's Seven Bridges of Königsberg (1736).
 // =============================================================================
+
+// Required type codes — preamble provides concrete integer values
+operation TYPE_Node : ℤ
 
 define is_node(c) = graph_ctype(c) = TYPE_Node
 
