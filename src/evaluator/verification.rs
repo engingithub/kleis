@@ -7,6 +7,7 @@ use crate::kleis_ast::{ExampleBlock, ExampleStatement, FunctionDef, Program, Top
 use crate::structure_registry::StructureRegistry;
 
 use super::{AssertResult, Evaluator, ExampleResult};
+use crate::solvers::backend::Witness;
 
 impl Evaluator {
     /// Helper: Get the source location of a statement (if available)
@@ -44,6 +45,7 @@ impl Evaluator {
     pub fn eval_example_block(&mut self, example: &ExampleBlock) -> ExampleResult {
         let mut assertions_passed = 0;
         let mut assertions_total = 0;
+        let mut last_witness: Option<Witness> = None;
 
         // Create a snapshot of current bindings to restore later
         let saved_bindings = self.bindings.clone();
@@ -109,6 +111,7 @@ impl Evaluator {
                                 error: Some(format!("Error evaluating let {}: {}", name, e)),
                                 assertions_passed,
                                 assertions_total,
+                                witness: None,
                             };
                         }
                     }
@@ -184,9 +187,11 @@ impl Evaluator {
                         AssertResult::Passed => {
                             assertions_passed += 1;
                         }
-                        AssertResult::Verified { .. } => {
-                            // Z3 verified the symbolic assertion!
+                        AssertResult::Verified { witness } => {
                             assertions_passed += 1;
+                            if witness.is_some() {
+                                last_witness = witness;
+                            }
                         }
                         AssertResult::Failed { expected, actual } => {
                             // Restore bindings and return error
@@ -200,6 +205,7 @@ impl Evaluator {
                                 )),
                                 assertions_passed,
                                 assertions_total,
+                                witness: None,
                             };
                         }
                         AssertResult::Disproved { witness } => {
@@ -214,6 +220,7 @@ impl Evaluator {
                                 )),
                                 assertions_passed,
                                 assertions_total,
+                                witness: None,
                             };
                         }
                         AssertResult::InconsistentAxioms => {
@@ -231,6 +238,7 @@ impl Evaluator {
                                 ),
                                 assertions_passed,
                                 assertions_total,
+                                witness: None,
                             };
                         }
                         AssertResult::Unknown(reason) => {
@@ -243,6 +251,7 @@ impl Evaluator {
                                 error: Some(format!("Assertion unknown: {}", reason)),
                                 assertions_passed,
                                 assertions_total,
+                                witness: None,
                             };
                         }
                     }
@@ -258,6 +267,7 @@ impl Evaluator {
                             error: Some(format!("Error evaluating expression: {}", e)),
                             assertions_passed,
                             assertions_total,
+                            witness: None,
                         };
                     }
                 }
@@ -273,6 +283,7 @@ impl Evaluator {
             error: None,
             assertions_passed,
             assertions_total,
+            witness: last_witness,
         }
     }
 

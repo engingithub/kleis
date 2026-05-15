@@ -28,6 +28,7 @@
 - [Jupyter Notebook](./chapters/21-jupyter-notebook.md)
 - [Document Generation](./chapters/23-document-generation.md)
 - [Equation Editor](./chapters/31-equation-editor.md)
+- [Graph Editor](./chapters/32-graph-editor.md)
 - [Sheet Music](./chapters/30-sheet-music.md)
 - [Applications](./chapters/13-applications.md)
 - [Example Blocks](./chapters/20-example-blocks.md)

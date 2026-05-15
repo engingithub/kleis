@@ -1509,6 +1509,12 @@ impl Evaluator {
                 if args.len() != 1 {
                     return Ok(None);
                 }
+                if let Some((re, im)) = self.extract_complex(&args[0]) {
+                    let re_f = self.extract_f64(&re)?;
+                    let im_f = self.extract_f64(&im)?;
+                    let mag = (re_f * re_f + im_f * im_f).sqrt();
+                    return Ok(Some(Expression::Const(mag.to_string())));
+                }
                 let x = self.extract_f64(&args[0])?;
                 Ok(Some(Expression::Const(x.abs().to_string())))
             }

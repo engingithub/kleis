@@ -51,6 +51,8 @@ pub struct ExampleResult {
     pub assertions_passed: usize,
     /// Total number of assertions
     pub assertions_total: usize,
+    /// Witness from the last Z3-verified assertion (for ∃ queries)
+    pub witness: Option<Witness>,
 }
 
 /// Result of a single assertion

@@ -1,0 +1,330 @@
+// =============================================================================
+// RLC Circuit Z3 Extraction Test
+// =============================================================================
+//
+// Se(1V) — 1-junction — R(1Ω) — (0-junction — C(1F) — I(1H))
+//
+// Components:
+//   c0: Junction0 (0-junction)
+//   c1: Capacitor  (C=1, initial=0)
+//   c2: Inertia    (I=1)
+//   c3: EffortSource (V=1)
+//   c4: Resistor   (R=1)
+//   c5: Junction1  (1-junction)
+//
+// Nets (5 nets, 6 components):
+//   n0: c0(+1), c2(-1)    — 0-junction ↔ I
+//   n1: c0(+1), c1(-1)    — 0-junction ↔ C
+//   n2: c3(+1), c5(-1)    — Se ↔ 1-junction
+//   n3: c4(-1), c5(+1)    — 1-junction ↔ R
+//   n4: c0(-1), c5(+1)    — 1-junction ↔ 0-junction
+//
+// State variables:
+//   i=0: Capacitor (c1), net 1 → effort(1) = state_var(0)
+//   i=1: Inertia   (c2), net 0 → flow(0)   = state_var(1)
+//
+// Input:
+//   k=0: EffortSource (c3), net 2 → effort(2) = input_var(0)
+//
+// Expected A (R=C=I=1):
+//   A = [[-1/RC, -1/C],  =  [[-1, -1],
+//        [ 1/L,    0 ]]      [ 1,  0]]
+//
+// Expected B:
+//   B = [[1/RC],  =  [[1],
+//        [ 0  ]]      [0]]
+// =============================================================================
+
+// --- Graph primitives ---
+operation graph_nc : ℤ
+operation graph_nn : ℤ
+operation graph_ctype : ℤ → ℤ
+operation graph_param : ℤ × ℤ → ℝ
+operation graph_inc : ℤ × ℤ → ℤ
+
+structure GraphData {
+    axiom nc: graph_nc = 6
+    axiom nn: graph_nn = 5
+
+    // Type codes
+    axiom tc_j0: TYPE_Junction0 = 1
+    axiom tc_c:  TYPE_Capacitor = 2
+    axiom tc_in: TYPE_Inertia = 3
+    axiom tc_se: TYPE_EffortSource = 4
+    axiom tc_r:  TYPE_Resistor = 5
+    axiom tc_j1: TYPE_Junction1 = 6
+    axiom tc_fs: TYPE_FlowSource = 7
+    axiom tc_tf: TYPE_Transformer = 8
+    axiom tc_gy: TYPE_Gyrator = 9
+
+    // Component types
+    axiom ct0: graph_ctype(0) = 1   // Junction0
+    axiom ct1: graph_ctype(1) = 2   // Capacitor
+    axiom ct2: graph_ctype(2) = 3   // Inertia
+    axiom ct3: graph_ctype(3) = 4   // EffortSource
+    axiom ct4: graph_ctype(4) = 5   // Resistor
+    axiom ct5: graph_ctype(5) = 6   // Junction1
+
+    // Parameters: R=1, C=1, I=1, Se effort=1
+    axiom p0_0: graph_param(0, 0) = 0
+    axiom p0_1: graph_param(0, 1) = 0
+    axiom p1_0: graph_param(1, 0) = 1     // C = 1
+    axiom p1_1: graph_param(1, 1) = 0     // initial = 0
+    axiom p2_0: graph_param(2, 0) = 1     // I = 1
+    axiom p2_1: graph_param(2, 1) = 0
+    axiom p3_0: graph_param(3, 0) = 1     // effort = 1
+    axiom p3_1: graph_param(3, 1) = 0
+    axiom p4_0: graph_param(4, 0) = 1     // R = 1
+    axiom p4_1: graph_param(4, 1) = 0
+    axiom p5_0: graph_param(5, 0) = 0
+    axiom p5_1: graph_param(5, 1) = 0
+
+    // Closed-world for ctype
+    axiom ctype_closed: ∀(c : ℤ). (c < 0 ∨ c ≥ 6) → graph_ctype(c) = 0
+
+    // Distinctness of type codes
+    axiom d_j0_c:   ¬(TYPE_Junction0 = TYPE_Capacitor)
+    axiom d_j0_in:  ¬(TYPE_Junction0 = TYPE_Inertia)
+    axiom d_j0_se:  ¬(TYPE_Junction0 = TYPE_EffortSource)
+    axiom d_j0_r:   ¬(TYPE_Junction0 = TYPE_Resistor)
+    axiom d_j0_j1:  ¬(TYPE_Junction0 = TYPE_Junction1)
+    axiom d_c_in:   ¬(TYPE_Capacitor = TYPE_Inertia)
+    axiom d_c_se:   ¬(TYPE_Capacitor = TYPE_EffortSource)
+    axiom d_c_r:    ¬(TYPE_Capacitor = TYPE_Resistor)
+    axiom d_c_j1:   ¬(TYPE_Capacitor = TYPE_Junction1)
+    axiom d_in_se:  ¬(TYPE_Inertia = TYPE_EffortSource)
+    axiom d_in_r:   ¬(TYPE_Inertia = TYPE_Resistor)
+    axiom d_in_j1:  ¬(TYPE_Inertia = TYPE_Junction1)
+    axiom d_se_r:   ¬(TYPE_EffortSource = TYPE_Resistor)
+    axiom d_se_j1:  ¬(TYPE_EffortSource = TYPE_Junction1)
+    axiom d_r_j1:   ¬(TYPE_Resistor = TYPE_Junction1)
+
+    // Incidence matrix (5 nets × 6 components, all entries explicit)
+    // n0: c0(+1), c2(-1)
+    axiom i_0_0: graph_inc(0, 0) = 1
+    axiom i_0_1: graph_inc(0, 1) = 0
+    axiom i_0_2: graph_inc(0, 2) = -1
+    axiom i_0_3: graph_inc(0, 3) = 0
+    axiom i_0_4: graph_inc(0, 4) = 0
+    axiom i_0_5: graph_inc(0, 5) = 0
+    // n1: c0(+1), c1(-1)
+    axiom i_1_0: graph_inc(1, 0) = 1
+    axiom i_1_1: graph_inc(1, 1) = -1
+    axiom i_1_2: graph_inc(1, 2) = 0
+    axiom i_1_3: graph_inc(1, 3) = 0
+    axiom i_1_4: graph_inc(1, 4) = 0
+    axiom i_1_5: graph_inc(1, 5) = 0
+    // n2: c3(+1), c5(-1)
+    axiom i_2_0: graph_inc(2, 0) = 0
+    axiom i_2_1: graph_inc(2, 1) = 0
+    axiom i_2_2: graph_inc(2, 2) = 0
+    axiom i_2_3: graph_inc(2, 3) = 1
+    axiom i_2_4: graph_inc(2, 4) = 0
+    axiom i_2_5: graph_inc(2, 5) = -1
+    // n3: c4(-1), c5(+1)
+    axiom i_3_0: graph_inc(3, 0) = 0
+    axiom i_3_1: graph_inc(3, 1) = 0
+    axiom i_3_2: graph_inc(3, 2) = 0
+    axiom i_3_3: graph_inc(3, 3) = 0
+    axiom i_3_4: graph_inc(3, 4) = -1
+    axiom i_3_5: graph_inc(3, 5) = 1
+    // n4: c0(-1), c5(+1)
+    axiom i_4_0: graph_inc(4, 0) = -1
+    axiom i_4_1: graph_inc(4, 1) = 0
+    axiom i_4_2: graph_inc(4, 2) = 0
+    axiom i_4_3: graph_inc(4, 3) = 0
+    axiom i_4_4: graph_inc(4, 4) = 0
+    axiom i_4_5: graph_inc(4, 5) = 1
+}
+
+// --- Type code operations ---
+operation TYPE_EffortSource : ℤ
+operation TYPE_FlowSource : ℤ
+operation TYPE_Resistor : ℤ
+operation TYPE_Capacitor : ℤ
+operation TYPE_Inertia : ℤ
+operation TYPE_Transformer : ℤ
+operation TYPE_Gyrator : ℤ
+operation TYPE_Junction0 : ℤ
+operation TYPE_Junction1 : ℤ
+
+define is_effort_source(c) = graph_ctype(c) = TYPE_EffortSource
+define is_flow_source(c) = graph_ctype(c) = TYPE_FlowSource
+define is_resistor(c) = graph_ctype(c) = TYPE_Resistor
+define is_capacitor(c) = graph_ctype(c) = TYPE_Capacitor
+define is_inertia(c) = graph_ctype(c) = TYPE_Inertia
+define is_transformer(c) = graph_ctype(c) = TYPE_Transformer
+define is_gyrator(c) = graph_ctype(c) = TYPE_Gyrator
+define is_0junction(c) = graph_ctype(c) = TYPE_Junction0
+define is_1junction(c) = graph_ctype(c) = TYPE_Junction1
+
+// --- Simulation topology operations ---
+operation sim_ns : ℤ
+operation sim_ni : ℤ
+operation sim_state_comp : ℤ → ℤ
+operation sim_state_net  : ℤ → ℤ
+operation sim_input_comp : ℤ → ℤ
+operation sim_input_net  : ℤ → ℤ
+
+// --- Z3 unknowns ---
+operation effort    : ℤ → ℝ
+operation flow      : ℤ → ℝ
+operation sim_A     : ℤ × ℤ → ℝ
+operation sim_B     : ℤ × ℤ → ℝ
+operation deriv     : ℤ → ℝ
+operation state_var : ℤ → ℝ
+operation input_var : ℤ → ℝ
+
+operation effort_sum  : ℤ × ℤ → ℝ
+operation flow_sum    : ℤ × ℤ → ℝ
+operation a_row_sum   : ℤ × ℤ → ℝ
+operation b_row_sum   : ℤ × ℤ → ℝ
+
+structure BondGraphDynamics {
+    axiom flow_sum_base: ∀(j : ℤ). flow_sum(j, 0) =
+        graph_inc(0, j) * flow(0)
+    axiom flow_sum_step: ∀(j : ℤ). ∀(n : ℤ).
+        (n ≥ 1 ∧ n < graph_nn)
+        → flow_sum(j, n) = flow_sum(j, n - 1) + graph_inc(n, j) * flow(n)
+
+    axiom junction0_effort: ∀(j : ℤ). ∀(n1 : ℤ). ∀(n2 : ℤ).
+        (j ≥ 0 ∧ j < graph_nc ∧ is_0junction(j) ∧
+         n1 ≥ 0 ∧ n1 < graph_nn ∧ ¬(graph_inc(n1, j) = 0) ∧
+         n2 ≥ 0 ∧ n2 < graph_nn ∧ ¬(graph_inc(n2, j) = 0))
+        → effort(n1) = effort(n2)
+    axiom junction0_flow: ∀(j : ℤ).
+        (j ≥ 0 ∧ j < graph_nc ∧ is_0junction(j) ∧ graph_nn ≥ 1)
+        → flow_sum(j, graph_nn - 1) = 0
+
+    axiom effort_sum_base: ∀(j : ℤ). effort_sum(j, 0) =
+        graph_inc(0, j) * effort(0)
+    axiom effort_sum_step: ∀(j : ℤ). ∀(n : ℤ).
+        (n ≥ 1 ∧ n < graph_nn)
+        → effort_sum(j, n) = effort_sum(j, n - 1) + graph_inc(n, j) * effort(n)
+
+    axiom junction1_flow: ∀(j : ℤ). ∀(n1 : ℤ). ∀(n2 : ℤ).
+        (j ≥ 0 ∧ j < graph_nc ∧ is_1junction(j) ∧
+         n1 ≥ 0 ∧ n1 < graph_nn ∧ ¬(graph_inc(n1, j) = 0) ∧
+         n2 ≥ 0 ∧ n2 < graph_nn ∧ ¬(graph_inc(n2, j) = 0))
+        → flow(n1) = flow(n2)
+    axiom junction1_effort: ∀(j : ℤ).
+        (j ≥ 0 ∧ j < graph_nc ∧ is_1junction(j) ∧ graph_nn ≥ 1)
+        → effort_sum(j, graph_nn - 1) = 0
+
+    axiom source_effort: ∀(c : ℤ). ∀(n : ℤ). ∀(k : ℤ).
+        (c ≥ 0 ∧ c < graph_nc ∧ is_effort_source(c) ∧
+         n ≥ 0 ∧ n < graph_nn ∧ ¬(graph_inc(n, c) = 0) ∧
+         k ≥ 0 ∧ k < sim_ni ∧ sim_input_comp(k) = c)
+        → effort(n) = input_var(k)
+
+    axiom source_flow: ∀(c : ℤ). ∀(n : ℤ). ∀(k : ℤ).
+        (c ≥ 0 ∧ c < graph_nc ∧ is_flow_source(c) ∧
+         n ≥ 0 ∧ n < graph_nn ∧ ¬(graph_inc(n, c) = 0) ∧
+         k ≥ 0 ∧ k < sim_ni ∧ sim_input_comp(k) = c)
+        → flow(n) = input_var(k)
+
+    axiom resistor: ∀(c : ℤ). ∀(n : ℤ).
+        (c ≥ 0 ∧ c < graph_nc ∧ is_resistor(c) ∧
+         n ≥ 0 ∧ n < graph_nn ∧ ¬(graph_inc(n, c) = 0))
+        → effort(n) = graph_param(c, 0) * flow(n)
+
+    axiom cap_state: ∀(i : ℤ).
+        (i ≥ 0 ∧ i < sim_ns ∧ is_capacitor(sim_state_comp(i)))
+        → effort(sim_state_net(i)) = state_var(i)
+
+    axiom iner_state: ∀(i : ℤ).
+        (i ≥ 0 ∧ i < sim_ns ∧ is_inertia(sim_state_comp(i)))
+        → flow(sim_state_net(i)) = state_var(i)
+
+    axiom cap_deriv: ∀(i : ℤ).
+        (i ≥ 0 ∧ i < sim_ns ∧ is_capacitor(sim_state_comp(i)))
+        → deriv(i) = flow(sim_state_net(i)) / graph_param(sim_state_comp(i), 0)
+
+    axiom iner_deriv: ∀(i : ℤ).
+        (i ≥ 0 ∧ i < sim_ns ∧ is_inertia(sim_state_comp(i)))
+        → deriv(i) = effort(sim_state_net(i)) / graph_param(sim_state_comp(i), 0)
+
+    axiom a_row_base: ∀(i : ℤ). (sim_ns ≥ 1)
+        → a_row_sum(i, 0) = sim_A(i, 0) * state_var(0)
+    axiom a_row_step: ∀(i : ℤ). ∀(j : ℤ).
+        (j ≥ 1 ∧ j < sim_ns)
+        → a_row_sum(i, j) = a_row_sum(i, j - 1) + sim_A(i, j) * state_var(j)
+
+    axiom b_row_base: ∀(i : ℤ). (sim_ni ≥ 1)
+        → b_row_sum(i, 0) = sim_B(i, 0) * input_var(0)
+    axiom b_row_step: ∀(i : ℤ). ∀(k : ℤ).
+        (k ≥ 1 ∧ k < sim_ni)
+        → b_row_sum(i, k) = b_row_sum(i, k - 1) + sim_B(i, k) * input_var(k)
+
+    axiom ss_link: ∀(i : ℤ). (i ≥ 0 ∧ i < sim_ns)
+        → deriv(i) = a_row_sum(i, sim_ns - 1) + b_row_sum(i, sim_ni - 1)
+}
+
+// --- SimTopology with explicit junction axioms ---
+structure SimTopology {
+    axiom ns_val: sim_ns = 2
+    axiom ni_val: sim_ni = 1
+    axiom sc_0: sim_state_comp(0) = 1
+    axiom sn_0: sim_state_net(0) = 1
+    axiom sc_1: sim_state_comp(1) = 2
+    axiom sn_1: sim_state_net(1) = 0
+    axiom ic_0: sim_input_comp(0) = 3
+    axiom in_0: sim_input_net(0) = 2
+
+    // Explicit 0-junction effort equalities (c0: nets 0, 1, 4)
+    axiom j0_e_0_1: effort(0) = effort(1)
+    axiom j0_e_0_4: effort(0) = effort(4)
+    axiom j0_e_1_4: effort(1) = effort(4)
+
+    // Explicit 1-junction flow equalities (c5: nets 2, 3, 4)
+    axiom j5_f_2_3: flow(2) = flow(3)
+    axiom j5_f_2_4: flow(2) = flow(4)
+    axiom j5_f_3_4: flow(3) = flow(4)
+}
+
+// =============================================================================
+// A-column probes: set one state_var to 1, others to 0, all inputs to 0
+// =============================================================================
+
+// --- Probe A col 0: state_var(0)=1, state_var(1)=0, input_var(0)=0 ---
+structure Probe_A0 {
+    axiom sv_0: state_var(0) = 1
+    axiom sv_1: state_var(1) = 0
+    axiom iv_0: input_var(0) = 0
+}
+
+example "PROBE_A0" {
+    assert(∃(d_0 : ℝ). ∃(d_1 : ℝ). deriv(0) = d_0 ∧ deriv(1) = d_1)
+}
+
+// Check that A col 0 has the expected values: A[0][0] = -1, A[1][0] = 1
+example "CHECK_A00_is_minus1" {
+    assert(∃(a : ℝ). sim_A(0, 0) = a ∧ a = -1)
+}
+
+example "CHECK_A10_is_1" {
+    assert(∃(a : ℝ). sim_A(1, 0) = a ∧ a = 1)
+}
+
+// --- Probe A col 1: state_var(0)=0, state_var(1)=1, input_var(0)=0 ---
+// (comment out Probe_A0 and uncomment this to test column 1)
+// structure Probe_A1 {
+//     axiom sv_0: state_var(0) = 0
+//     axiom sv_1: state_var(1) = 1
+//     axiom iv_0: input_var(0) = 0
+// }
+//
+// example "PROBE_A1" {
+//     assert(∃(d_0 : ℝ). ∃(d_1 : ℝ). deriv(0) = d_0 ∧ deriv(1) = d_1)
+// }
+
+// --- Probe B col 0: state_var(0)=0, state_var(1)=0, input_var(0)=1 ---
+// structure Probe_B0 {
+//     axiom sv_0: state_var(0) = 0
+//     axiom sv_1: state_var(1) = 0
+//     axiom iv_0: input_var(0) = 1
+// }
+//
+// example "PROBE_B0" {
+//     assert(∃(d_0 : ℝ). ∃(d_1 : ℝ). deriv(0) = d_0 ∧ deriv(1) = d_1)
+// }

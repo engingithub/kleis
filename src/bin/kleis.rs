@@ -539,6 +539,7 @@ fn run_test(file: PathBuf, example_filter: Option<String>, verbose: bool, raw_ou
                     assertions_passed: 0,
                     assertions_total: 0,
                     error: Some(format!("Z3 panic (likely out of memory): {}", msg)),
+                    witness: None,
                 }
             }
         };

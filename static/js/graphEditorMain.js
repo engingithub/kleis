@@ -516,6 +516,19 @@ const simState = {
     playing: false,
     playTimer: null,
     speed: 2,        // steps per second (index into SPEED_STOPS)
+    // Continuous simulation state (populated by /api/simulate_setup)
+    simMode: null,
+    aMatrix: null,
+    bMatrix: null,
+    inputs: null,
+    dt: null,
+    tauMin: null,    // fastest time scale from theory (eigenvalue-adaptive)
+    stateMap: null,
+    inputMap: null,
+    time: 0,         // accumulated simulation time
+    chunkSize: 100,  // integration steps per server call
+    trajectory: [],  // [{t, state: [v0, v1, ...]}] oscilloscope memory
+    scopeWindow: { tDiv: null, vDiv: null, tOffset: 0, autoScale: true },
 };
 
 const SPEED_STOPS = [1, 2, 5, 10, 30, 60];
@@ -557,6 +570,9 @@ function buildIncidenceData() {
 }
 
 async function simulateStep() {
+    if (simState.simMode === 'continuous') {
+        return simulateStepContinuous();
+    }
     const req = buildSimRequest({ type: 'Step' });
     try {
         const resp = await fetch('/api/simulate_graph', {
@@ -594,13 +610,72 @@ async function simulateStep() {
     }
 }
 
+async function simulateStepContinuous() {
+    if (!simState.aMatrix || !simState.bMatrix) {
+        showSimStatus('No setup data — reset first', 'halted');
+        return false;
+    }
+    // Extract compact state from state_map indices
+    const compactState = simState.stateMap.map(ci => simState.state[ci] || 0);
+    const req = buildSimRequest({ type: 'Step' });
+    req.state = compactState;
+    req.sim_mode = 'continuous';
+    req.a_matrix = simState.aMatrix;
+    req.b_matrix = simState.bMatrix;
+    req.inputs = simState.inputs;
+    req.dt = simState.dt;
+    req.chunk_size = simState.chunkSize;
+    try {
+        const resp = await fetch('/api/simulate_graph', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(req),
+        });
+        const data = await resp.json();
+        if (data.error) {
+            showSimStatus(`Error: ${data.error}`, 'halted');
+            return false;
+        }
+        // Accumulate trajectory and update state
+        if (data.time_series && data.time_series.length > 0) {
+            for (const sample of data.time_series) {
+                simState.stepCount++;
+                simState.time += simState.dt;
+                simState.trajectory.push({
+                    t: simState.time,
+                    state: sample.state.slice(),
+                });
+            }
+            const finalSample = data.time_series[data.time_series.length - 1];
+            for (let i = 0; i < simState.stateMap.length; i++) {
+                const ci = simState.stateMap[i];
+                if (ci >= 0 && ci < simState.state.length) {
+                    simState.state[ci] = finalSample.state[i];
+                }
+            }
+        }
+        updateSimPanel();
+        renderStateOverlay();
+        renderOscilloscope();
+        const t = simState.time;
+        const tStr = t < 0.001 ? `${(t * 1e6).toFixed(1)}us`
+                   : t < 1     ? `${(t * 1e3).toFixed(2)}ms`
+                   :             `${t.toFixed(4)}s`;
+        showSimStatus(`t = ${tStr}, step ${simState.stepCount}`, 'running');
+        return true;
+    } catch (e) {
+        showSimStatus(`Fetch error: ${e.message}`, 'halted');
+        return false;
+    }
+}
+
 function startPlayback() {
     if (simState.playing) return;
     simState.playing = true;
     updatePlayButton();
     const sps = SPEED_STOPS[simState.speed];
     const interval = Math.round(1000 / sps);
-    showSimStatus(`Playing at ${sps} steps/sec`, 'running');
+    showSimStatus(`Playing at ${speedLabelText()}`, 'running');
     simState.playTimer = setInterval(async () => {
         const ok = await simulateStep();
         if (!ok) stopPlayback();
@@ -628,15 +703,27 @@ function togglePlayback() {
     }
 }
 
+function speedLabelText() {
+    const sps = SPEED_STOPS[simState.speed];
+    if (simState.simMode === 'continuous' && simState.tauMin != null) {
+        return `${sps} τ/s`;
+    }
+    return `${sps} sps`;
+}
+
+function updateSpeedLabel() {
+    const label = document.getElementById('simSpeedLabel');
+    if (label) label.textContent = speedLabelText();
+}
+
 function setSimSpeed(idx) {
     simState.speed = Math.max(0, Math.min(SPEED_STOPS.length - 1, idx));
-    const sps = SPEED_STOPS[simState.speed];
-    const label = document.getElementById('simSpeedLabel');
-    if (label) label.textContent = `${sps} sps`;
+    updateSpeedLabel();
     if (simState.playing) {
         clearInterval(simState.playTimer);
+        const sps = SPEED_STOPS[simState.speed];
         const interval = Math.round(1000 / sps);
-        showSimStatus(`Playing at ${sps} steps/sec`, 'running');
+        showSimStatus(`Playing at ${speedLabelText()}`, 'running');
         simState.playTimer = setInterval(async () => {
             const ok = await simulateStep();
             if (!ok) stopPlayback();
@@ -650,7 +737,11 @@ function updatePlayButton() {
 }
 
 async function simulateReset() {
-    // Compute fresh initial state from component params using stateParam metadata
+    const mode = getSimMode();
+    if (mode === 'continuous') {
+        return simulateResetContinuous();
+    }
+    // Discrete reset (Petri nets, etc.)
     const initState = graphState.components.map(c => {
         const def = COMPONENT_DEFS[c.type];
         const sp = def?.stateParam;
@@ -670,10 +761,67 @@ async function simulateReset() {
         simState.lastFired = null;
         simState.history = [];
         simState.stepCount = 0;
+        simState.simMode = null;
         updateSimPanel();
         renderStateOverlay();
         highlightEnabled();
         showSimStatus('Reset to initial state', 'running');
+    } catch (e) {
+        showSimStatus(`Fetch error: ${e.message}`, 'halted');
+    }
+}
+
+async function simulateResetContinuous() {
+    showSimStatus('Running setup (Z3 extraction)...', 'running');
+    const req = buildSimRequest({ type: 'Reset' });
+    try {
+        const resp = await fetch('/api/simulate_setup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(req),
+        });
+        const data = await resp.json();
+        if (data.error) {
+            showSimStatus(`Setup error: ${data.error}`, 'halted');
+            return;
+        }
+        simState.simMode = data.sim_mode;
+        simState.aMatrix = data.a_matrix;
+        simState.bMatrix = data.b_matrix;
+        simState.inputs = data.input_values;
+        simState.dt = data.dt || parseFloat(domainConfig.sim_dt) || 0.0001;
+        simState.tauMin = data.tau_min || null;
+        simState.chunkSize = data.chunk_size || 100;
+        simState.stateMap = data.state_map;
+        simState.inputMap = data.input_map;
+        // Build full state vector (one per component), set storage elements to initial values
+        const fullState = graphState.components.map(() => 0);
+        if (data.state_map && data.initial_state) {
+            for (let i = 0; i < data.state_map.length; i++) {
+                const ci = data.state_map[i];
+                if (ci >= 0 && ci < fullState.length) {
+                    fullState[ci] = data.initial_state[i] || 0;
+                }
+            }
+        }
+        simState.state = fullState;
+        simState.enabled = [];
+        simState.lastFired = null;
+        simState.history = [];
+        simState.stepCount = 0;
+        simState.time = 0;
+        simState.trajectory = [];
+        simState.scopeWindow = { tDiv: null, vDiv: null, tOffset: 0, autoScale: true };
+        updateSimPanel();
+        renderStateOverlay();
+        renderOscilloscope();
+        const ns = data.state_map?.length || 0;
+        const ni = data.input_map?.length || 0;
+        const tauStr = simState.tauMin != null
+            ? `, τ=${formatEngineering(simState.tauMin, 's')}`
+            : '';
+        showSimStatus(`Setup OK: ${ns} states, ${ni} inputs, dt=${formatEngineering(simState.dt, 's')}${tauStr}`, 'running');
+        updateSpeedLabel();
     } catch (e) {
         showSimStatus(`Fetch error: ${e.message}`, 'halted');
     }
@@ -694,7 +842,7 @@ function openSimPanel() {
     const panel = document.getElementById('simulatePanel');
     if (!panel) return;
 
-    const initSps = SPEED_STOPS[simState.speed];
+    const isContinuous = getSimMode() === 'continuous';
     panel.innerHTML = `
         <h3>Simulation</h3>
         <div class="sim-controls">
@@ -705,10 +853,18 @@ function openSimPanel() {
         </div>
         <div class="sim-speed">
             <button id="simSpeedDown" title="Slower">&minus;</button>
-            <span id="simSpeedLabel">${initSps} sps</span>
+            <span id="simSpeedLabel">${SPEED_STOPS[simState.speed]} sps</span>
             <button id="simSpeedUp" title="Faster">+</button>
         </div>
         <div class="sim-status running" id="simStatus">Ready — click Step or Play</div>
+        ${isContinuous ? `
+        <div id="scopeContainer" class="scope-container">
+            <div class="scope-toolbar">
+                <button id="scopeAutoSet" title="Auto-scale axes">AutoSet</button>
+                <button id="scopeCopyTypst" title="Copy Lilaq plot to clipboard">Copy Typst</button>
+            </div>
+            <svg id="scopeSvg" viewBox="0 0 500 320" preserveAspectRatio="xMidYMid meet" width="100%"></svg>
+        </div>` : ''}
         <div class="sim-history" id="simHistory"></div>
     `;
     panel.classList.add('visible');
@@ -719,6 +875,36 @@ function openSimPanel() {
     document.getElementById('simClose').addEventListener('click', closeSimPanel);
     document.getElementById('simSpeedDown').addEventListener('click', () => setSimSpeed(simState.speed - 1));
     document.getElementById('simSpeedUp').addEventListener('click', () => setSimSpeed(simState.speed + 1));
+
+    const autoSetBtn = document.getElementById('scopeAutoSet');
+    if (autoSetBtn) autoSetBtn.addEventListener('click', () => {
+        simState.scopeWindow.autoScale = true;
+        renderOscilloscope();
+    });
+    const copyTypstBtn = document.getElementById('scopeCopyTypst');
+    if (copyTypstBtn) copyTypstBtn.addEventListener('click', exportScopeTypst);
+
+    // Drag-to-move via the title bar
+    const titleBar = panel.querySelector('h3');
+    if (titleBar) {
+        let dragX, dragY;
+        titleBar.addEventListener('mousedown', (e) => {
+            dragX = e.clientX - panel.offsetLeft;
+            dragY = e.clientY - panel.offsetTop;
+            const onMove = (ev) => {
+                panel.style.left = (ev.clientX - dragX) + 'px';
+                panel.style.top = (ev.clientY - dragY) + 'px';
+                panel.style.right = 'auto';
+            };
+            const onUp = () => {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+            };
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+            e.preventDefault();
+        });
+    }
 
     simulateReset();
 }
@@ -738,6 +924,20 @@ function closeSimPanel() {
 function updateSimPanel() {
     const historyEl = document.getElementById('simHistory');
     if (!historyEl) return;
+    if (simState.simMode === 'continuous') {
+        // Show state variable values instead of fired-component history
+        let html = '';
+        if (simState.stateMap) {
+            for (let i = 0; i < simState.stateMap.length; i++) {
+                const ci = simState.stateMap[i];
+                const name = graphState.components[ci]?.type || `c${ci}`;
+                const val = simState.state?.[ci] ?? 0;
+                html += `<div class="sim-history-item">x${i} (${name}): <strong>${val.toFixed(6)}</strong></div>`;
+            }
+        }
+        historyEl.innerHTML = html;
+        return;
+    }
     let html = '';
     const recent = simState.history.slice(-20);
     for (const h of recent) {
@@ -805,6 +1005,254 @@ function highlightEnabled() {
 
 function clearEnabledHighlights() {
     document.querySelectorAll('.sim-enabled').forEach(el => el.classList.remove('sim-enabled'));
+}
+
+// ---------------------------------------------------------------------------
+// Oscilloscope — SVG scope display for continuous simulation
+// ---------------------------------------------------------------------------
+
+const SCOPE_COLORS = ['#FFD700', '#00CCCC', '#CC66FF', '#66CC66'];
+const SCOPE = { W: 500, H: 320, ML: 45, MR: 10, MT: 10, MB: 24 };
+const SCOPE_PLOT = {
+    x: SCOPE.ML, y: SCOPE.MT,
+    w: SCOPE.W - SCOPE.ML - SCOPE.MR,
+    h: SCOPE.H - SCOPE.MT - SCOPE.MB,
+};
+const SCOPE_HDIV = 10;
+const SCOPE_VDIV = 8;
+
+function autoScale125(range) {
+    if (range <= 0) return 1;
+    const mult = [2, 2.5, 2];
+    let step = 1e-15;
+    let idx = 0;
+    while (step < range / SCOPE_VDIV && idx < 200) {
+        step *= mult[idx % 3];
+        idx++;
+    }
+    return step;
+}
+
+function autoScaleTime125(range) {
+    if (range <= 0) return 1e-3;
+    const mult = [2, 2.5, 2];
+    let step = 1e-15;
+    let idx = 0;
+    while (step < range / SCOPE_HDIV && idx < 200) {
+        step *= mult[idx % 3];
+        idx++;
+    }
+    return step;
+}
+
+function formatEngineering(val, unit) {
+    const abs = Math.abs(val);
+    if (abs === 0) return `0 ${unit}`;
+    if (abs >= 1)    return `${val.toPrecision(3)} ${unit}`;
+    if (abs >= 1e-3) return `${(val * 1e3).toPrecision(3)} m${unit}`;
+    if (abs >= 1e-6) return `${(val * 1e6).toPrecision(3)} \u00B5${unit}`;
+    if (abs >= 1e-9) return `${(val * 1e9).toPrecision(3)} n${unit}`;
+    return `${val.toExponential(2)} ${unit}`;
+}
+
+function renderOscilloscope() {
+    const svg = document.getElementById('scopeSvg');
+    if (!svg) return;
+
+    const traj = simState.trajectory;
+    const nVars = simState.stateMap?.length || 0;
+
+    if (!traj || traj.length < 2 || nVars === 0) {
+        svg.innerHTML = `<text x="${SCOPE.W/2}" y="${SCOPE.H/2}" text-anchor="middle" fill="#556" font-size="12" font-family="monospace">No data — run simulation</text>`;
+        return;
+    }
+
+    const sw = simState.scopeWindow;
+
+    // Compute data bounds
+    const tMin = traj[0].t;
+    const tMax = traj[traj.length - 1].t;
+    const tRange = tMax - tMin;
+
+    let vGlobalMin = Infinity, vGlobalMax = -Infinity;
+    for (const sample of traj) {
+        for (let vi = 0; vi < nVars; vi++) {
+            const v = sample.state[vi];
+            if (v < vGlobalMin) vGlobalMin = v;
+            if (v > vGlobalMax) vGlobalMax = v;
+        }
+    }
+    const vRange = vGlobalMax - vGlobalMin;
+
+    if (sw.autoScale || sw.tDiv == null || sw.vDiv == null) {
+        sw.tDiv = autoScaleTime125(tRange);
+        sw.vDiv = autoScale125(vRange || 1);
+        sw.tOffset = 0;
+        sw.autoScale = false;
+    }
+
+    const tDiv = sw.tDiv;
+    const vDiv = sw.vDiv;
+
+    // Axis ranges centered on data
+    const vMid = (vGlobalMax + vGlobalMin) / 2;
+    const vHalf = vDiv * SCOPE_VDIV / 2;
+    const vLo = vMid - vHalf;
+    const vHi = vMid + vHalf;
+
+    const tHi = tMax;
+    const tLo = tHi - tDiv * SCOPE_HDIV;
+
+    const px = SCOPE_PLOT;
+
+    // Build SVG content
+    let parts = [];
+
+    // Background
+    parts.push(`<rect x="${px.x}" y="${px.y}" width="${px.w}" height="${px.h}" fill="#0d0d1a" rx="2"/>`);
+
+    // Minor gridlines (1/5 of a division)
+    for (let i = 0; i <= SCOPE_HDIV * 5; i++) {
+        const x = px.x + (i / (SCOPE_HDIV * 5)) * px.w;
+        parts.push(`<line x1="${x}" y1="${px.y}" x2="${x}" y2="${px.y + px.h}" class="scope-grid-minor"/>`);
+    }
+    for (let i = 0; i <= SCOPE_VDIV * 5; i++) {
+        const y = px.y + (i / (SCOPE_VDIV * 5)) * px.h;
+        parts.push(`<line x1="${px.x}" y1="${y}" x2="${px.x + px.w}" y2="${y}" class="scope-grid-minor"/>`);
+    }
+
+    // Major gridlines
+    for (let i = 0; i <= SCOPE_HDIV; i++) {
+        const x = px.x + (i / SCOPE_HDIV) * px.w;
+        parts.push(`<line x1="${x}" y1="${px.y}" x2="${x}" y2="${px.y + px.h}" class="scope-grid-major"/>`);
+    }
+    for (let i = 0; i <= SCOPE_VDIV; i++) {
+        const y = px.y + (i / SCOPE_VDIV) * px.h;
+        parts.push(`<line x1="${px.x}" y1="${y}" x2="${px.x + px.w}" y2="${y}" class="scope-grid-major"/>`);
+    }
+
+    // Center crosshair (brighter)
+    const cx = px.x + px.w / 2;
+    const cy = px.y + px.h / 2;
+    parts.push(`<line x1="${cx}" y1="${px.y}" x2="${cx}" y2="${px.y + px.h}" class="scope-grid-center"/>`);
+    parts.push(`<line x1="${px.x}" y1="${cy}" x2="${px.x + px.w}" y2="${cy}" class="scope-grid-center"/>`);
+
+    // Clip path for traces
+    parts.push(`<defs><clipPath id="scopeClip"><rect x="${px.x}" y="${px.y}" width="${px.w}" height="${px.h}"/></clipPath></defs>`);
+
+    // Traces — one polyline per state variable
+    const plotW = px.w;
+    for (let vi = 0; vi < nVars; vi++) {
+        const color = SCOPE_COLORS[vi % SCOPE_COLORS.length];
+        const points = [];
+
+        if (traj.length <= plotW) {
+            // Few samples: direct point-to-point
+            for (const sample of traj) {
+                const sx = px.x + ((sample.t - tLo) / (tHi - tLo)) * px.w;
+                const sy = px.y + px.h - ((sample.state[vi] - vLo) / (vHi - vLo)) * px.h;
+                points.push(`${sx.toFixed(1)},${sy.toFixed(1)}`);
+            }
+            parts.push(`<polyline points="${points.join(' ')}" stroke="${color}" class="scope-trace" clip-path="url(#scopeClip)"/>`);
+        } else {
+            // Min/max envelope downsampling
+            const segParts = [];
+            const bucketSize = traj.length / plotW;
+            for (let col = 0; col < plotW; col++) {
+                const iStart = Math.floor(col * bucketSize);
+                const iEnd = Math.min(Math.floor((col + 1) * bucketSize), traj.length);
+                let mn = Infinity, mx = -Infinity;
+                for (let j = iStart; j < iEnd; j++) {
+                    const v = traj[j].state[vi];
+                    if (v < mn) mn = v;
+                    if (v > mx) mx = v;
+                }
+                const sx = px.x + ((col + 0.5) / plotW) * px.w;
+                const syMin = px.y + px.h - ((mn - vLo) / (vHi - vLo)) * px.h;
+                const syMax = px.y + px.h - ((mx - vLo) / (vHi - vLo)) * px.h;
+                if (Math.abs(syMin - syMax) < 0.5) {
+                    segParts.push(`${sx.toFixed(1)},${syMin.toFixed(1)}`);
+                } else {
+                    segParts.push(`${sx.toFixed(1)},${syMax.toFixed(1)}`);
+                    segParts.push(`${sx.toFixed(1)},${syMin.toFixed(1)}`);
+                }
+            }
+            parts.push(`<polyline points="${segParts.join(' ')}" stroke="${color}" class="scope-trace" clip-path="url(#scopeClip)"/>`);
+        }
+    }
+
+    // Axis labels — time (bottom)
+    const tDivStr = formatEngineering(tDiv, 's');
+    parts.push(`<text x="${px.x}" y="${SCOPE.H - 2}" class="scope-readout" fill="#8888aa">${tDivStr}/div</text>`);
+
+    // Axis labels — value/div (bottom right, per channel)
+    const vDivStr = formatEngineering(vDiv, '');
+    for (let vi = 0; vi < nVars; vi++) {
+        const color = SCOPE_COLORS[vi % SCOPE_COLORS.length];
+        const ci = simState.stateMap[vi];
+        const label = graphState.components[ci]?.type || `x${vi}`;
+        const xPos = SCOPE.W - SCOPE.MR - vi * 90 - 5;
+        parts.push(`<text x="${xPos}" y="${SCOPE.H - 2}" class="scope-readout" fill="${color}" text-anchor="end">${label}: ${vDivStr}/div</text>`);
+    }
+
+    // Current time (top right)
+    const tStr = formatEngineering(simState.time, 's');
+    parts.push(`<text x="${SCOPE.W - SCOPE.MR}" y="${SCOPE.MT + 12}" class="scope-readout" fill="#aaaacc" text-anchor="end">t = ${tStr}</text>`);
+
+    // Y-axis tick labels
+    for (let i = 0; i <= SCOPE_VDIV; i++) {
+        const v = vHi - (i / SCOPE_VDIV) * (vHi - vLo);
+        const y = px.y + (i / SCOPE_VDIV) * px.h;
+        const vStr = Math.abs(v) < 1e-12 ? '0' : v.toPrecision(2);
+        parts.push(`<text x="${px.x - 3}" y="${y + 3}" class="scope-axis-label" text-anchor="end">${vStr}</text>`);
+    }
+
+    svg.innerHTML = parts.join('\n');
+}
+
+function exportScopeTypst() {
+    const traj = simState.trajectory;
+    const nVars = simState.stateMap?.length || 0;
+    if (!traj || traj.length < 2 || nVars === 0) {
+        showSimStatus('No trajectory data to export', 'halted');
+        return;
+    }
+
+    // Downsample to at most 500 points for readable Typst output
+    const maxPts = 500;
+    const step = traj.length <= maxPts ? 1 : Math.ceil(traj.length / maxPts);
+    const sampled = [];
+    for (let i = 0; i < traj.length; i += step) sampled.push(traj[i]);
+    if (sampled[sampled.length - 1] !== traj[traj.length - 1]) sampled.push(traj[traj.length - 1]);
+
+    const tArr = sampled.map(s => s.t.toPrecision(6)).join(', ');
+
+    const typstColors = ['yellow', 'eastern', 'purple', 'green'];
+    let plots = '';
+    for (let vi = 0; vi < nVars; vi++) {
+        const ci = simState.stateMap[vi];
+        const label = graphState.components[ci]?.type || `x${vi}`;
+        const vArr = sampled.map(s => s.state[vi].toPrecision(6)).join(', ');
+        const color = typstColors[vi % typstColors.length];
+        plots += `  lq.plot(\n    (${tArr}),\n    (${vArr}),\n    label: "${label}",\n    stroke: ${color},\n  ),\n`;
+    }
+
+    const typst = `#import "@preview/lilaq:0.3.0" as lq\n\n#lq.diagram(\n  width: 12cm,\n  height: 8cm,\n  x-label: "Time (s)",\n  y-label: "Value",\n${plots})\n`;
+
+    navigator.clipboard.writeText(typst).then(() => {
+        showSimStatus('Typst (Lilaq) copied to clipboard!', 'running');
+        setTimeout(() => {
+            if (simState.active) {
+                const t = simState.time;
+                const tFmt = t < 0.001 ? `${(t * 1e6).toFixed(1)}us`
+                           : t < 1     ? `${(t * 1e3).toFixed(2)}ms`
+                           :             `${t.toFixed(4)}s`;
+                showSimStatus(`t = ${tFmt}, step ${simState.stepCount}`, 'running');
+            }
+        }, 2000);
+    }).catch(() => {
+        showSimStatus('Clipboard write failed', 'halted');
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1937,6 +2385,8 @@ canvasContainer.addEventListener('wheel', (e) => {
 // ---------------------------------------------------------------------------
 
 document.addEventListener('keydown', (e) => {
+    const tag = e.target.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
     if (e.key === ' ') { spaceHeld = true; canvas.style.cursor = 'grab'; e.preventDefault(); return; }
     if (e.key === 'p' || e.key === 'P') setMode('place');
     else if (e.key === 'c' || e.key === 'C') setMode('connect');

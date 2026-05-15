@@ -1,7 +1,7 @@
 # ADR-037: Graph Editor with Domain-Agnostic Routing and Verification
 
-**Status:** Accepted & Implemented (Phases 1–8)
-**Date:** 2026-04-27 (original), 2026-05-14 (Phase 8 + theory-driven simulation)
+**Status:** Accepted & Implemented (Phases 1–10)
+**Date:** 2026-04-27 (original), 2026-05-14 (Phase 10 + eigenvalue-adaptive simulation)
 **Relates to:** ADR-005 (Visual Authoring), ADR-022 (Z3 Integration), ADR-023
 (Template Externalization), ADR-035 (Multi-Domain Template Compiler), ADR-036
 (Multi-Domain Template Generality)
@@ -621,6 +621,150 @@ operators, but only `"and"`/`"or"` and Unicode symbols were previously handled.
 correctly processes all tokens through a linear workflow (Source → T0 → Place
 → T1 → Sink) in 10 steps with round-robin transition selection.
 
+### Phase 9 (Implemented): Continuous Simulation via Z3 State-Space Extraction
+
+Phase 8 established the theory-driven simulation contract for discrete systems
+(Petri nets). Phase 9 extends this to continuous systems (bond graphs,
+electronics) using a two-phase protocol: Z3 extracts the state-space matrices
+once, then the theory performs numerical integration.
+
+**Two-Phase Protocol:**
+
+| Phase | Endpoint | What Happens |
+|-------|----------|--------------|
+| **Setup** | `POST /api/simulate_setup` | Load theory, eval_concrete for dimensions/mappings, run Z3 probes to extract A and B matrices |
+| **Integration** | `POST /api/simulate_graph` (mode=continuous) | Server injects A/B as preamble defines, theory's `sim_step(i)` performs Euler integration via eval_concrete |
+
+**Unit-Vector Probe Extraction:**
+
+A naive `∃(a). ∃(b). sim_A(0,0)=a ∧ sim_B(0,0)=b` query is underconstrained:
+Z3 picks concrete values for state_var and input_var, turning the state-space
+equation `ẋ = Ax + Bu` into one equation with two unknowns. Z3 finds trivial
+solutions (A=0, B=0).
+
+The fix: probe with unit vectors. For each column j of A, pin
+`state_var(j')=δ(j,j')` and `input_var(k)=0`. The physics constraints
+uniquely determine `deriv(i) = A(i,j)`. Similarly for B columns with unit
+input vectors. Total probes: ns + ni (number of state + input variables).
+
+**Theory-Owned Probe Contract:**
+
+The server is fully domain-agnostic. The theory defines these contract
+functions that return Kleis source strings for Z3 extraction:
+
+| Function | Returns | Semantics |
+|----------|---------|-----------|
+| `sim_topology_source` | string | `structure SimTopology { ... }` with operation mappings |
+| `sim_probe_count` | integer | Total probes needed (ns + ni) |
+| `sim_probe_kind(p)` | 0 or 1 | 0 = A-column, 1 = B-column |
+| `sim_probe_col(p)` | integer | Column index within A or B |
+| `sim_probe_source(p)` | string | `structure Probe_... { ... }` + `example "PROBE" { ... }` |
+
+The server evaluates these via eval_concrete, concatenates the source strings
+with the verify preamble and theory, parses, runs Z3, and reads witness
+bindings `d_0`, `d_1`, ... from the "PROBE" example.
+
+**Continuous Simulation Contract** (eval_concrete interface):
+
+| Function | Phase | Returns | Semantics |
+|----------|-------|---------|-----------|
+| `sim_state_count` | Setup | integer | Number of state variables (C + I elements) |
+| `sim_input_count` | Setup | integer | Number of inputs (Se + Sf elements) |
+| `sim_state_map(i)` | Setup | integer | Component index of state variable i |
+| `sim_input_map(k)` | Setup | integer | Component index of input k |
+| `sim_connected_net(c)` | Setup | integer | Net connected to 1-port component c |
+| `sim_initial_state(i)` | Setup | real | Initial value of state variable i |
+| `sim_input_value(k)` | Setup | real | Value of input source k |
+| `sim_step(i)` | Integration | real | New value of state variable i after one Euler step |
+| `sim_halted()` | Integration | boolean | Always false for continuous (client controls stop) |
+
+**Shared Preamble Names** (injected by server, consumed by theory):
+
+The integration phase injects `sim_state`, `sim_A_val`, `sim_B_val`,
+`sim_inputs`, `sim_dt_val`, `sim_ns_val`, `sim_ni_val` as `define`
+statements. These are cross-domain contract names analogous to `sim_state`
+in the discrete contract.
+
+**UNSAT = Invalid Circuit:**
+
+If Z3 returns UNSAT or Unknown during a probe, the graph is physically
+invalid (e.g., contradictory junction constraints, missing ground). The
+server reports this as an error without needing to understand domain physics.
+
+**Buffered Trajectory Streaming:**
+
+The integration endpoint returns trajectory chunks (time series of state
+values). The client can request chunks incrementally and play them back like
+video streaming, enabling smooth visualization of continuous dynamics.
+
+**Explicit Incidence Enumeration:**
+
+The verify preamble now enumerates ALL `(net, component)` and
+`(component, param)` pairs explicitly (including zeros), rather than using
+`∀`-quantified closed-world axioms. This prevents Z3 quantifier
+instantiation failures that left some incidence values unconstrained.
+
+### Phase 10 (Implemented): Eigenvalue-Adaptive Simulation + Oscilloscope
+
+Phase 9 used a fixed timestep `dt` from `.kleist` metadata. This is
+fragile: a `dt` too large for fast dynamics causes instability; too small
+for slow dynamics wastes computation. Phase 10 lets the **theory** decide
+its own natural time scale.
+
+**Three-Pass Setup Protocol:**
+
+| Pass | Engine | What Happens |
+|------|--------|--------------|
+| **1** | `eval_concrete` | Dimensions, mappings, initial state, input values |
+| **2** | Z3 probes | Extract A and B matrices via unit-vector probes |
+| **3** | `eval_concrete` (A/B injected) | Theory computes eigenvalue-adaptive `dt`, `tau_min`, `chunk_size` |
+
+Pass 3 injects the extracted A/B matrices back into the Kleis evaluator as
+preamble `define` statements (`sim_A_val`, `sim_B_val`, `sim_ns_val`,
+`sim_ni_val`), then calls theory-defined contract functions:
+
+| Function | Returns | Semantics |
+|----------|---------|-----------|
+| `sim_tau_min` | real | Fastest characteristic time scale (1/\|λ\_max\|) |
+| `sim_dt` | real | Recommended integration step (τ\_min / 20) |
+| `sim_chunk_size` | integer | Integration steps per server call (20 = 1τ per call) |
+
+**Domain-Agnostic Adaptive Parameters:**
+
+The server calls these as contract names — it never interprets eigenvalues
+or matrices. The theory decides what "natural time scale" means:
+
+- **Bond graphs / electronics (linear):** `eigenvalues(sim_A_val)` via
+  LAPACK, then `τ_min = 1 / max(|λ|)`. For real eigenvalues (RC/RL
+  circuits) this is the fastest decay time constant; for complex
+  eigenvalues (RLC circuits) it captures the fastest oscillation period.
+- **Protein folding (future):** energy barrier heights, folding rates
+- **Nonlinear systems (future):** Jacobian linearization, Lyapunov exponents
+
+Graceful fallback: if the theory doesn't define these functions (e.g.,
+older theory files), the server falls back to the `.kleist` `sim_dt` value.
+
+**SVG Oscilloscope:**
+
+The client renders an SVG oscilloscope in the simulation panel for
+continuous-mode domains:
+
+- **10×8 graticule** with major/minor gridlines and center crosshairs
+- **1-2-5 auto-scaling** (voltage and time axes follow the standard
+  oscilloscope scaling sequence: 1, 2, 5, 10, 20, 50, ...)
+- **Min/max envelope downsampling** for traces longer than display width
+- **Engineering notation** labels (ms, µs, ns for time; mV, µV for voltage)
+- **Channel color coding** (state variables mapped to distinct colors)
+- **AutoSet button:** recomputes axis scales from current trajectory
+- **Copy Typst button:** exports trajectory data as a Lilaq-compatible
+  Typst plot, with automatic downsampling for manageable file sizes
+
+**Adaptive Speed Label:**
+
+When `tau_min` is available from the theory, the speed control label shows
+"τ/s" (taus per second) instead of "sps" (steps per second), reflecting
+that each "step" advances the simulation by one characteristic time scale.
+
 ### WASM Status
 
 WASM was initially prototyped for graph logic but removed from the active code
@@ -661,11 +805,12 @@ computationally intensive operations (e.g., large graph layout, ODE simulation).
 1. **Two editors to maintain.** The Graph Editor and Equation Editor share no
    rendering code. Future changes to common patterns (e.g., template loading)
    must be applied in both places.
-2. ~~**No bounded model checking.**~~ **Partially resolved by Phase 8.** The
+2. ~~**No bounded model checking.**~~ **Partially resolved by Phases 8–10.** The
    domain-agnostic simulation architecture enables step-by-step state space
-   exploration via theory-defined `sim_enabled`/`sim_fire` functions. Full
-   reachability analysis (e.g., all reachable markings of a Petri net) would
-   require a generic BFS framework as a future extension.
+   exploration (discrete via `sim_enabled`/`sim_fire`, continuous via Z3
+   state-space extraction + RK4 integration with eigenvalue-adaptive
+   timestep). Full reachability analysis (e.g., all reachable markings of a
+   Petri net) would require a generic BFS framework as a future extension.
 3. **No persistent trunk waypoints for multi-port nets.** Trunk routing is
    recomputed each time; users cannot manually adjust trunk segments of
    multi-port nets (only 2-port nets have persistent draggable waypoints).
@@ -688,7 +833,7 @@ computationally intensive operations (e.g., large graph layout, ODE simulation).
 |------|------|
 | `static/graph_editor.html` | Graph Editor HTML structure |
 | `static/js/graphEditorMain.js` | Core editor logic: interaction, routing, rendering, verification |
-| `src/bin/server.rs` | `/api/verify_graph` + `/api/simulate_graph` endpoints, domain-agnostic preamble generators |
+| `src/bin/server.rs` | `/api/verify_graph` + `/api/simulate_setup` + `/api/simulate_graph` endpoints, domain-agnostic preamble generators |
 | **Template files (`.kleist`)** | |
 | `std_template_lib/electronics.kleist` | Electronics templates + `__domain_electronics` config |
 | `std_template_lib/bond_graph.kleist` | Bond graph templates + `__domain_bond_graph` config |
@@ -696,8 +841,8 @@ computationally intensive operations (e.g., large graph layout, ODE simulation).
 | `std_template_lib/graph_theory.kleist` | Abstract graph theory templates + `__domain_graph_theory` config |
 | **Companion theories (`.kleis`)** | |
 | `std_template_lib/electronics.kleis` | Electronics verification (KVL/KCL structural checks) |
-| `std_template_lib/bond_graph.kleis` | Bond graph verification (SCAP structural checks) |
-| `std_template_lib/petri_net.kleis` | Petri net verification + simulation (bipartiteness, marking, sim_enabled/fire/halt) |
+| `std_template_lib/bond_graph.kleis` | Bond graph verification (SCAP structural checks) + continuous simulation (Z3 probe protocol, eigenvalue-adaptive timing) |
+| `std_template_lib/petri_net.kleis` | Petri net verification + discrete simulation (bipartiteness, marking, sim_enabled/fire/halt) |
 | `std_template_lib/graph_theory.kleis` | Abstract graph theory (degree parity, Eulerian path) |
 | **SVG assets** | |
 | `static/svg/electronics/` | SVG assets for electronic components |

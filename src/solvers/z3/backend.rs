@@ -5256,9 +5256,33 @@ impl<'r> Z3Backend<'r> {
         self.quantifier_vars.clear();
         self.solver.push();
 
+        // Flatten nested existentials: ∃a. ∃b. ∃c. P(a,b,c) → free vars {a,b,c}, body P
+        // Without flattening, inner ∃ variables become Z3-bound (exists_const)
+        // and don't appear in the model, making witness extraction fail.
+        let mut all_vars: Vec<QuantifiedVar> = variables.to_vec();
+        let mut where_clauses: Vec<&Expression> = Vec::new();
+        if let Some(wc) = where_clause {
+            where_clauses.push(wc);
+        }
+        let mut innermost_body = body;
+        while let Expression::Quantifier {
+            quantifier: QuantifierKind::Exists,
+            variables: inner_vars,
+            body: inner_body,
+            where_clause: inner_where,
+            ..
+        } = innermost_body
+        {
+            all_vars.extend(inner_vars.iter().cloned());
+            if let Some(wc) = inner_where {
+                where_clauses.push(wc);
+            }
+            innermost_body = inner_body;
+        }
+
         // Create free variables (NOT bound by exists_const) so they appear in the model
         let mut var_map: HashMap<String, Dynamic> = HashMap::new();
-        for var in variables {
+        for var in &all_vars {
             let z3_var: Dynamic = if let Some(type_annotation) = &var.type_annotation {
                 match type_annotation.as_str() {
                     "Bool" | "Boolean" => Bool::fresh_const(&var.name).into(),
@@ -5285,22 +5309,24 @@ impl<'r> Z3Backend<'r> {
             var_map.insert(var.name.clone(), z3_var);
         }
 
-        // Translate the body with free variables
-        let body_z3 = self.kleis_to_z3(body, &var_map)?;
+        // Translate the innermost body with ALL free variables
+        let body_z3 = self.kleis_to_z3(innermost_body, &var_map)?;
         let body_bool = body_z3
             .as_bool()
             .ok_or_else(|| "Existential body must be boolean".to_string())?;
 
-        // Handle where clause: assert where_clause AND body
-        let formula = if let Some(condition) = where_clause {
-            let cond_z3 = self.kleis_to_z3(condition, &var_map)?;
-            let cond_bool = cond_z3
+        // Combine all where clauses with the body
+        let mut conjuncts: Vec<Bool> = Vec::new();
+        for wc in &where_clauses {
+            let wc_z3 = self.kleis_to_z3(wc, &var_map)?;
+            let wc_bool = wc_z3
                 .as_bool()
                 .ok_or_else(|| "Where clause must be boolean".to_string())?;
-            Bool::and(&[&cond_bool, &body_bool])
-        } else {
-            body_bool
-        };
+            conjuncts.push(wc_bool);
+        }
+        conjuncts.push(body_bool);
+        let conjunct_refs: Vec<&Bool> = conjuncts.iter().collect();
+        let formula = Bool::and(&conjunct_refs);
 
         // Assert directly (NOT negated) — we want to find a satisfying assignment
         self.solver.assert(&formula);

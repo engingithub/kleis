@@ -1,0 +1,207 @@
+// =============================================================================
+// RC Circuit Z3 Extraction Test
+// =============================================================================
+//
+// Se(10V) — 1-junction — R(100Ω) — C(1μF)
+//
+//   c0: EffortSource, c1: Junction1, c2: Resistor, c3: Capacitor
+//   n0: c0↔c1, n1: c1↔c2, n2: c1↔c3
+//
+// Expected: A = [[-1/(RC)]] = [[-10000]], B = [[1/(RC)]] = [[10000]]
+//
+// Key insight: state_var and input_var must remain SYMBOLIC so Z3 is forced
+// to find A and B as the unique linear coefficients. If we bind them to
+// concrete values, deriv = A*x + B*u has infinitely many solutions.
+// =============================================================================
+
+// --- Verify preamble ---
+operation graph_nc : ℤ
+operation graph_nn : ℤ
+operation graph_ctype : ℤ → ℤ
+operation graph_param : ℤ × ℤ → ℝ
+operation graph_inc : ℤ × ℤ → ℤ
+
+structure GraphData {
+    axiom nc: graph_nc = 4
+    axiom nn: graph_nn = 3
+
+    axiom ct0: graph_ctype(0) = 1
+    axiom ct1: graph_ctype(1) = 2
+    axiom ct2: graph_ctype(2) = 3
+    axiom ct3: graph_ctype(3) = 4
+
+    axiom p2_0: graph_param(2, 0) = 100
+    axiom p3_0: graph_param(3, 0) = 0.000001
+
+    axiom i_0_0: graph_inc(0, 0) = 1
+    axiom i_0_1: graph_inc(0, 1) = -1
+    axiom i_0_2: graph_inc(0, 2) = 0
+    axiom i_0_3: graph_inc(0, 3) = 0
+    axiom i_1_0: graph_inc(1, 0) = 0
+    axiom i_1_1: graph_inc(1, 1) = 1
+    axiom i_1_2: graph_inc(1, 2) = -1
+    axiom i_1_3: graph_inc(1, 3) = 0
+    axiom i_2_0: graph_inc(2, 0) = 0
+    axiom i_2_1: graph_inc(2, 1) = 1
+    axiom i_2_2: graph_inc(2, 2) = 0
+    axiom i_2_3: graph_inc(2, 3) = -1
+
+    axiom tc_se: TYPE_EffortSource = 1
+    axiom tc_j1: TYPE_Junction1 = 2
+    axiom tc_r:  TYPE_Resistor = 3
+    axiom tc_c:  TYPE_Capacitor = 4
+    axiom tc_fs: TYPE_FlowSource = 5
+    axiom tc_in: TYPE_Inertia = 6
+    axiom tc_tf: TYPE_Transformer = 7
+    axiom tc_gy: TYPE_Gyrator = 8
+    axiom tc_j0: TYPE_Junction0 = 9
+}
+
+// --- Theory ---
+operation TYPE_EffortSource : ℤ
+operation TYPE_FlowSource : ℤ
+operation TYPE_Resistor : ℤ
+operation TYPE_Capacitor : ℤ
+operation TYPE_Inertia : ℤ
+operation TYPE_Transformer : ℤ
+operation TYPE_Gyrator : ℤ
+operation TYPE_Junction0 : ℤ
+operation TYPE_Junction1 : ℤ
+
+define is_effort_source(c) = graph_ctype(c) = TYPE_EffortSource
+define is_flow_source(c) = graph_ctype(c) = TYPE_FlowSource
+define is_resistor(c) = graph_ctype(c) = TYPE_Resistor
+define is_capacitor(c) = graph_ctype(c) = TYPE_Capacitor
+define is_inertia(c) = graph_ctype(c) = TYPE_Inertia
+define is_transformer(c) = graph_ctype(c) = TYPE_Transformer
+define is_gyrator(c) = graph_ctype(c) = TYPE_Gyrator
+define is_0junction(c) = graph_ctype(c) = TYPE_Junction0
+define is_1junction(c) = graph_ctype(c) = TYPE_Junction1
+
+// --- Simulation topology operations ---
+operation sim_ns : ℤ
+operation sim_ni : ℤ
+operation sim_state_comp : ℤ → ℤ
+operation sim_state_net  : ℤ → ℤ
+operation sim_input_comp : ℤ → ℤ
+operation sim_input_net  : ℤ → ℤ
+
+// --- Z3 unknowns (parametric in symbolic state/input) ---
+operation effort    : ℤ → ℝ
+operation flow      : ℤ → ℝ
+operation sim_A     : ℤ × ℤ → ℝ
+operation sim_B     : ℤ × ℤ → ℝ
+operation deriv     : ℤ → ℝ
+operation state_var : ℤ → ℝ
+operation input_var : ℤ → ℝ
+
+operation effort_sum  : ℤ × ℤ → ℝ
+operation flow_sum    : ℤ × ℤ → ℝ
+operation a_row_sum   : ℤ × ℤ → ℝ
+operation b_row_sum   : ℤ × ℤ → ℝ
+
+structure BondGraphDynamics {
+    axiom flow_sum_base: ∀(j : ℤ). flow_sum(j, 0) =
+        graph_inc(0, j) * flow(0)
+    axiom flow_sum_step: ∀(j : ℤ). ∀(n : ℤ).
+        (n ≥ 1 ∧ n < graph_nn)
+        → flow_sum(j, n) = flow_sum(j, n - 1) + graph_inc(n, j) * flow(n)
+
+    axiom junction0_effort: ∀(j : ℤ). ∀(n1 : ℤ). ∀(n2 : ℤ).
+        (j ≥ 0 ∧ j < graph_nc ∧ is_0junction(j) ∧
+         n1 ≥ 0 ∧ n1 < graph_nn ∧ ¬(graph_inc(n1, j) = 0) ∧
+         n2 ≥ 0 ∧ n2 < graph_nn ∧ ¬(graph_inc(n2, j) = 0))
+        → effort(n1) = effort(n2)
+    axiom junction0_flow: ∀(j : ℤ).
+        (j ≥ 0 ∧ j < graph_nc ∧ is_0junction(j) ∧ graph_nn ≥ 1)
+        → flow_sum(j, graph_nn - 1) = 0
+
+    axiom effort_sum_base: ∀(j : ℤ). effort_sum(j, 0) =
+        graph_inc(0, j) * effort(0)
+    axiom effort_sum_step: ∀(j : ℤ). ∀(n : ℤ).
+        (n ≥ 1 ∧ n < graph_nn)
+        → effort_sum(j, n) = effort_sum(j, n - 1) + graph_inc(n, j) * effort(n)
+
+    axiom junction1_flow: ∀(j : ℤ). ∀(n1 : ℤ). ∀(n2 : ℤ).
+        (j ≥ 0 ∧ j < graph_nc ∧ is_1junction(j) ∧
+         n1 ≥ 0 ∧ n1 < graph_nn ∧ ¬(graph_inc(n1, j) = 0) ∧
+         n2 ≥ 0 ∧ n2 < graph_nn ∧ ¬(graph_inc(n2, j) = 0))
+        → flow(n1) = flow(n2)
+    axiom junction1_effort: ∀(j : ℤ).
+        (j ≥ 0 ∧ j < graph_nc ∧ is_1junction(j) ∧ graph_nn ≥ 1)
+        → effort_sum(j, graph_nn - 1) = 0
+
+    // Sources use symbolic input_var(k) instead of concrete graph_param
+    axiom source_effort: ∀(c : ℤ). ∀(n : ℤ). ∀(k : ℤ).
+        (c ≥ 0 ∧ c < graph_nc ∧ is_effort_source(c) ∧
+         n ≥ 0 ∧ n < graph_nn ∧ ¬(graph_inc(n, c) = 0) ∧
+         k ≥ 0 ∧ k < sim_ni ∧ sim_input_comp(k) = c)
+        → effort(n) = input_var(k)
+
+    axiom source_flow: ∀(c : ℤ). ∀(n : ℤ). ∀(k : ℤ).
+        (c ≥ 0 ∧ c < graph_nc ∧ is_flow_source(c) ∧
+         n ≥ 0 ∧ n < graph_nn ∧ ¬(graph_inc(n, c) = 0) ∧
+         k ≥ 0 ∧ k < sim_ni ∧ sim_input_comp(k) = c)
+        → flow(n) = input_var(k)
+
+    axiom resistor: ∀(c : ℤ). ∀(n : ℤ).
+        (c ≥ 0 ∧ c < graph_nc ∧ is_resistor(c) ∧
+         n ≥ 0 ∧ n < graph_nn ∧ ¬(graph_inc(n, c) = 0))
+        → effort(n) = graph_param(c, 0) * flow(n)
+
+    // Storage elements bind effort/flow to symbolic state_var
+    axiom cap_state: ∀(i : ℤ).
+        (i ≥ 0 ∧ i < sim_ns ∧ is_capacitor(sim_state_comp(i)))
+        → effort(sim_state_net(i)) = state_var(i)
+
+    axiom iner_state: ∀(i : ℤ).
+        (i ≥ 0 ∧ i < sim_ns ∧ is_inertia(sim_state_comp(i)))
+        → flow(sim_state_net(i)) = state_var(i)
+
+    axiom cap_deriv: ∀(i : ℤ).
+        (i ≥ 0 ∧ i < sim_ns ∧ is_capacitor(sim_state_comp(i)))
+        → deriv(i) = flow(sim_state_net(i)) / graph_param(sim_state_comp(i), 0)
+
+    axiom iner_deriv: ∀(i : ℤ).
+        (i ≥ 0 ∧ i < sim_ns ∧ is_inertia(sim_state_comp(i)))
+        → deriv(i) = effort(sim_state_net(i)) / graph_param(sim_state_comp(i), 0)
+
+    axiom a_row_base: ∀(i : ℤ). (sim_ns ≥ 1)
+        → a_row_sum(i, 0) = sim_A(i, 0) * state_var(0)
+    axiom a_row_step: ∀(i : ℤ). ∀(j : ℤ).
+        (j ≥ 1 ∧ j < sim_ns)
+        → a_row_sum(i, j) = a_row_sum(i, j - 1) + sim_A(i, j) * state_var(j)
+
+    axiom b_row_base: ∀(i : ℤ). (sim_ni ≥ 1)
+        → b_row_sum(i, 0) = sim_B(i, 0) * input_var(0)
+    axiom b_row_step: ∀(i : ℤ). ∀(k : ℤ).
+        (k ≥ 1 ∧ k < sim_ni)
+        → b_row_sum(i, k) = b_row_sum(i, k - 1) + sim_B(i, k) * input_var(k)
+
+    axiom ss_link: ∀(i : ℤ). (i ≥ 0 ∧ i < sim_ns)
+        → deriv(i) = a_row_sum(i, sim_ns - 1) + b_row_sum(i, sim_ni - 1)
+}
+
+// --- SimTopology ---
+structure SimTopology {
+    axiom ns_val: sim_ns = 1
+    axiom ni_val: sim_ni = 1
+    axiom sc_0: sim_state_comp(0) = 3
+    axiom sn_0: sim_state_net(0) = 2
+    axiom ic_0: sim_input_comp(0) = 0
+    axiom in_0: sim_input_net(0) = 0
+}
+
+// --- Extraction ---
+example "SIM_EXTRACT" {
+    assert(∃(a_0_0 : ℝ). ∃(b_0_0 : ℝ). sim_A(0, 0) = a_0_0 ∧ sim_B(0, 0) = b_0_0)
+}
+
+// --- Verification that the unique solution is correct ---
+example "CHECK_A_VALUE" {
+    assert(∃(a : ℝ). sim_A(0, 0) = a ∧ a = -10000)
+}
+
+example "CHECK_B_VALUE" {
+    assert(∃(b : ℝ). sim_B(0, 0) = b ∧ b = 10000)
+}

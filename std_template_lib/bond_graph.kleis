@@ -109,3 +109,400 @@ example "JUNCTION HAS BONDS: every junction connects to at least 2 elements" {
             ¬(n1 = n2) ∧
             ¬(graph_inc(n1, j) = 0) ∧ ¬(graph_inc(n2, j) = 0))
 }
+
+// =============================================================================
+// Continuous simulation — eval_concrete interface (setup helpers)
+// =============================================================================
+//
+// The setup endpoint calls these via eval_concrete (with sim preamble) to
+// determine system dimensions before constructing the Z3 extraction query.
+//
+// Interface contract (server calls via eval_concrete):
+//   sim_state_count       → number of state variables (C + I elements)
+//   sim_input_count       → number of inputs (Se + Sf elements)
+//   sim_state_map(i)      → component index of state variable i
+//   sim_input_map(i)      → component index of input i
+//   sim_connected_net(c)  → net index connected to 1-port component c
+//   sim_initial_state(i)  → initial value for state variable i
+// =============================================================================
+
+// Count storage elements (state variables: C and I)
+define sim_count_states_from(c) =
+    if c < 0 then 0
+    else if is_capacitor(c) ∨ is_inertia(c) then 1 + sim_count_states_from(c - 1)
+    else sim_count_states_from(c - 1)
+
+define sim_state_count = sim_count_states_from(graph_nc_val - 1)
+
+// Count source elements (inputs: Se and Sf)
+define sim_count_inputs_from(c) =
+    if c < 0 then 0
+    else if is_effort_source(c) ∨ is_flow_source(c) then 1 + sim_count_inputs_from(c - 1)
+    else sim_count_inputs_from(c - 1)
+
+define sim_input_count = sim_count_inputs_from(graph_nc_val - 1)
+
+// Map state index to component index (find the i-th storage element)
+define sim_state_idx_from(c) =
+    if c < 0 then 0
+    else if is_capacitor(c) ∨ is_inertia(c) then 1 + sim_state_idx_from(c - 1)
+    else sim_state_idx_from(c - 1)
+
+define sim_state_map_search(c, i) =
+    if c >= graph_nc_val then -1
+    else if (is_capacitor(c) ∨ is_inertia(c)) ∧ sim_state_idx_from(c - 1) = i then c
+    else sim_state_map_search(c + 1, i)
+
+define sim_state_map(i) = sim_state_map_search(0, i)
+
+// Map input index to component index (find the i-th source element)
+define sim_input_idx_from(c) =
+    if c < 0 then 0
+    else if is_effort_source(c) ∨ is_flow_source(c) then 1 + sim_input_idx_from(c - 1)
+    else sim_input_idx_from(c - 1)
+
+define sim_input_map_search(c, i) =
+    if c >= graph_nc_val then -1
+    else if (is_effort_source(c) ∨ is_flow_source(c)) ∧ sim_input_idx_from(c - 1) = i then c
+    else sim_input_map_search(c + 1, i)
+
+define sim_input_map(i) = sim_input_map_search(0, i)
+
+// Find the net connected to a 1-port component (first net with nonzero incidence)
+define sim_find_net(c, n) =
+    if n >= graph_nn_val then -1
+    else if ¬(graph_inc_val(n, c) = 0) then n
+    else sim_find_net(c, n + 1)
+
+define sim_connected_net(c) = sim_find_net(c, 0)
+
+// Initial state: reads the "initial" param (index 1) from the storage element
+define sim_initial_state(i) = graph_param_val(sim_state_map(i), 1)
+
+// Source values: reads the value param (index 0) from the source element
+define sim_input_value(k) = graph_param_val(sim_input_map(k), 0)
+
+// =============================================================================
+// Continuous simulation — eval_concrete integration (sim_step)
+// =============================================================================
+//
+// Same pattern as Petri net sim_fire: the server injects data as preamble
+// defines and calls sim_step(i) via eval_concrete.
+//
+// Injected by server preamble (same as sim_state for Petri nets):
+//   sim_state     = [...]       current state vector
+//   sim_A_val     = [[...]]     A matrix (from Z3 setup extraction)
+//   sim_B_val     = [[...]]     B vector (from Z3 setup extraction)
+//   sim_inputs    = [...]       source values
+//   sim_dt_val    = 0.0001      time step
+//   sim_ns_val    = 1           number of states
+//   sim_ni_val    = 1           number of inputs
+//
+// Interface contract (server calls via eval_concrete):
+//   sim_step(i)    → new state value for state variable i
+//   sim_halted()   → false (continuous runs until client stops)
+// =============================================================================
+
+define sim_a_entry(i, j) = nth(nth(sim_A_val, i), j)
+define sim_b_entry(i, k) = nth(nth(sim_B_val, i), k)
+
+define sim_a_sum(i, j) =
+    if j < 0 then 0
+    else sim_a_entry(i, j) * nth(sim_state, j) + sim_a_sum(i, j - 1)
+
+define sim_b_sum(i, k) =
+    if k < 0 then 0
+    else sim_b_entry(i, k) * nth(sim_inputs, k) + sim_b_sum(i, k - 1)
+
+define sim_deriv_val(i) = sim_a_sum(i, sim_ns_val - 1) + sim_b_sum(i, sim_ni_val - 1)
+
+define sim_step(i) = nth(sim_state, i) + sim_dt_val * sim_deriv_val(i)
+
+define sim_halted() = false
+
+// =============================================================================
+// Adaptive simulation parameters — computed after A/B extraction
+// =============================================================================
+//
+// The server injects sim_A_val (matrix) before calling these via eval_concrete.
+// eigenvalues() returns a list of reals (or complex(re,im) for complex pairs).
+// For linear passive circuits, eigenvalues are real negative; abs() suffices.
+
+define sim_max_eigenvalue_magnitude =
+    list_fold(λ acc ev . let mag = abs(ev) in if mag > acc then mag else acc,
+              0,
+              eigenvalues(sim_A_val))
+
+define sim_tau_min =
+    if sim_max_eigenvalue_magnitude > 1e-12
+    then 1.0 / sim_max_eigenvalue_magnitude
+    else 1.0
+
+define sim_dt = sim_tau_min / 20
+
+define sim_chunk_size = 20
+
+// =============================================================================
+// Continuous simulation — Z3 probe protocol (theory-owned)
+// =============================================================================
+//
+// The server is domain-agnostic: it calls these contract functions via
+// eval_concrete to get Kleis source strings for Z3 extraction. The theory
+// knows its own operation names (state_var, input_var, deriv, sim_ns, etc.)
+// and builds the probe structures and examples.
+//
+// Contract (server calls via eval_concrete):
+//   sim_topology_source    → string: SimTopology structure source
+//   sim_probe_count        → integer: number of probes (ns + ni)
+//   sim_probe_kind(p)      → 0 = A-column, 1 = B-column
+//   sim_probe_col(p)       → column index within A or B
+//   sim_probe_source(p)    → string: Probe structure + example source
+//
+// Witness convention: the server reads bindings named d_0, d_1, ... from
+// the "PROBE" example and maps them to A[i][col] or B[i][col].
+// =============================================================================
+
+// --- SimTopology source builder ---
+// Builds axiom strings for state mappings: sim_state_comp(i) = comp, sim_state_net(i) = net
+define sim_topo_state_axioms(i) =
+    if i >= sim_state_count then ""
+    else concat(
+        "    axiom sc_", intToStr(i), ": sim_state_comp(", intToStr(i), ") = ", intToStr(sim_state_map(i)), "\n",
+        "    axiom sn_", intToStr(i), ": sim_state_net(", intToStr(i), ") = ", intToStr(sim_connected_net(sim_state_map(i))), "\n",
+        sim_topo_state_axioms(i + 1))
+
+// Builds axiom strings for input mappings: sim_input_comp(k) = comp, sim_input_net(k) = net
+define sim_topo_input_axioms(k) =
+    if k >= sim_input_count then ""
+    else concat(
+        "    axiom ic_", intToStr(k), ": sim_input_comp(", intToStr(k), ") = ", intToStr(sim_input_map(k)), "\n",
+        "    axiom in_", intToStr(k), ": sim_input_net(", intToStr(k), ") = ", intToStr(sim_connected_net(sim_input_map(k))), "\n",
+        sim_topo_input_axioms(k + 1))
+
+// Explicit junction effort/flow equality axioms for Z3
+// (replaces reliance on universal-quantifier junction0_effort / junction1_flow
+//  which Z3 may fail to instantiate in multi-junction topologies)
+define sim_junction_axiom_str(c, n1, n2) =
+    if is_0junction(c) then
+        concat("    axiom j", intToStr(c), "_e_", intToStr(n1), "_", intToStr(n2),
+               ": effort(", intToStr(n1), ") = effort(", intToStr(n2), ")\n")
+    else
+        concat("    axiom j", intToStr(c), "_f_", intToStr(n1), "_", intToStr(n2),
+               ": flow(", intToStr(n1), ") = flow(", intToStr(n2), ")\n")
+
+define sim_topo_junction_pairs(c, n1, n2) =
+    if n1 >= graph_nn_val then ""
+    else if n2 >= graph_nn_val then sim_topo_junction_pairs(c, n1 + 1, n1 + 2)
+    else if ¬(graph_inc_val(n1, c) = 0) ∧ ¬(graph_inc_val(n2, c) = 0) then
+        concat(sim_junction_axiom_str(c, n1, n2),
+               sim_topo_junction_pairs(c, n1, n2 + 1))
+    else sim_topo_junction_pairs(c, n1, n2 + 1)
+
+define sim_topo_junctions_from(c) =
+    if c >= graph_nc_val then ""
+    else if is_junction(c) then
+        concat(sim_topo_junction_pairs(c, 0, 1), sim_topo_junctions_from(c + 1))
+    else sim_topo_junctions_from(c + 1)
+
+define sim_topology_source = concat(
+    "structure SimTopology {\n",
+    "    axiom ns_val: sim_ns = ", intToStr(sim_state_count), "\n",
+    "    axiom ni_val: sim_ni = ", intToStr(sim_input_count), "\n",
+    sim_topo_state_axioms(0),
+    sim_topo_input_axioms(0),
+    sim_topo_junctions_from(0),
+    "}\n")
+
+// --- Probe protocol ---
+define sim_probe_count = sim_state_count + sim_input_count
+define sim_probe_kind(p) = if p < sim_state_count then 0 else 1
+define sim_probe_col(p) = if p < sim_state_count then p else p - sim_state_count
+
+// Build state_var axiom strings: state_var(j) = 1 if j=target_col, else 0
+define sim_probe_sv_axioms(j, target_col, ns) =
+    if j >= ns then ""
+    else concat(
+        "    axiom sv_", intToStr(j), ": state_var(", intToStr(j), ") = ",
+        if j = target_col then "1" else "0",
+        "\n",
+        sim_probe_sv_axioms(j + 1, target_col, ns))
+
+// Build input_var axiom strings: input_var(k) = 1 if k=target_col, else 0
+define sim_probe_iv_axioms(k, target_col, ni) =
+    if k >= ni then ""
+    else concat(
+        "    axiom iv_", intToStr(k), ": input_var(", intToStr(k), ") = ",
+        if k = target_col then "1" else "0",
+        "\n",
+        sim_probe_iv_axioms(k + 1, target_col, ni))
+
+// Build ∃ extraction: ∃(d_0 : ℝ). ... ∃(d_{ns-1} : ℝ). deriv(0) = d_0 ∧ ...
+define sim_probe_exists(i, ns) =
+    if i >= ns then ""
+    else if i = ns - 1 then concat("∃(d_", intToStr(i), " : ℝ). deriv(", intToStr(i), ") = d_", intToStr(i))
+    else concat("∃(d_", intToStr(i), " : ℝ). ", sim_probe_exists(i + 1, ns),
+                " ∧ deriv(", intToStr(i), ") = d_", intToStr(i))
+
+define sim_probe_source(p) =
+    if sim_probe_kind(p) = 0 then
+        // A-column probe: unit state vector at col, zero inputs
+        concat(
+            "structure Probe_A", intToStr(sim_probe_col(p)), " {\n",
+            sim_probe_sv_axioms(0, sim_probe_col(p), sim_state_count),
+            sim_probe_iv_axioms(0, -1, sim_input_count),
+            "}\n",
+            "example \"PROBE\" {\n    assert(", sim_probe_exists(0, sim_state_count), ")\n}\n")
+    else
+        // B-column probe: zero states, unit input vector at col
+        concat(
+            "structure Probe_B", intToStr(sim_probe_col(p)), " {\n",
+            sim_probe_sv_axioms(0, -1, sim_state_count),
+            sim_probe_iv_axioms(0, sim_probe_col(p), sim_input_count),
+            "}\n",
+            "example \"PROBE\" {\n    assert(", sim_probe_exists(0, sim_state_count), ")\n}\n")
+
+// =============================================================================
+// Continuous simulation — Z3 state-space extraction
+// =============================================================================
+//
+// Z3 unknowns:
+//   effort(n)  : ℝ  — effort on net n
+//   flow(n)    : ℝ  — flow on net n
+//   sim_A(i,j) : ℝ  — state matrix entry
+//   sim_B(i,k) : ℝ  — input matrix entry
+//   deriv(i)   : ℝ  — derivative of state variable i
+//   state_var(j): ℝ  — state variable value (effort for C, flow for I)
+//   input_var(k): ℝ  — input value (source effort or flow)
+// =============================================================================
+
+// Simulation topology — values injected by server in SimTopology structure
+operation sim_ns : ℤ
+operation sim_ni : ℤ
+operation sim_state_comp : ℤ → ℤ
+operation sim_state_net  : ℤ → ℤ
+operation sim_input_comp : ℤ → ℤ
+operation sim_input_net  : ℤ → ℤ
+
+// Z3 unknowns — parametric in symbolic state/input values
+operation effort    : ℤ → ℝ
+operation flow      : ℤ → ℝ
+operation sim_A     : ℤ × ℤ → ℝ
+operation sim_B     : ℤ × ℤ → ℝ
+operation deriv     : ℤ → ℝ
+operation state_var : ℤ → ℝ
+operation input_var : ℤ → ℝ
+
+// Partial-sum helpers
+operation effort_sum  : ℤ × ℤ → ℝ
+operation flow_sum    : ℤ × ℤ → ℝ
+operation a_row_sum   : ℤ × ℤ → ℝ
+operation b_row_sum   : ℤ × ℤ → ℝ
+
+structure BondGraphDynamics {
+    // -----------------------------------------------------------------
+    // Junction laws via partial sums
+    // -----------------------------------------------------------------
+
+    axiom flow_sum_base: ∀(j : ℤ). flow_sum(j, 0) =
+        graph_inc(0, j) * flow(0)
+    axiom flow_sum_step: ∀(j : ℤ). ∀(n : ℤ).
+        (n ≥ 1 ∧ n < graph_nn)
+        → flow_sum(j, n) = flow_sum(j, n - 1) + graph_inc(n, j) * flow(n)
+
+    // 0-junction: common effort, flows sum to zero
+    axiom junction0_effort: ∀(j : ℤ). ∀(n1 : ℤ). ∀(n2 : ℤ).
+        (j ≥ 0 ∧ j < graph_nc ∧ is_0junction(j) ∧
+         n1 ≥ 0 ∧ n1 < graph_nn ∧ ¬(graph_inc(n1, j) = 0) ∧
+         n2 ≥ 0 ∧ n2 < graph_nn ∧ ¬(graph_inc(n2, j) = 0))
+        → effort(n1) = effort(n2)
+    axiom junction0_flow: ∀(j : ℤ).
+        (j ≥ 0 ∧ j < graph_nc ∧ is_0junction(j) ∧ graph_nn ≥ 1)
+        → flow_sum(j, graph_nn - 1) = 0
+
+    axiom effort_sum_base: ∀(j : ℤ). effort_sum(j, 0) =
+        graph_inc(0, j) * effort(0)
+    axiom effort_sum_step: ∀(j : ℤ). ∀(n : ℤ).
+        (n ≥ 1 ∧ n < graph_nn)
+        → effort_sum(j, n) = effort_sum(j, n - 1) + graph_inc(n, j) * effort(n)
+
+    // 1-junction: common flow, efforts sum to zero
+    axiom junction1_flow: ∀(j : ℤ). ∀(n1 : ℤ). ∀(n2 : ℤ).
+        (j ≥ 0 ∧ j < graph_nc ∧ is_1junction(j) ∧
+         n1 ≥ 0 ∧ n1 < graph_nn ∧ ¬(graph_inc(n1, j) = 0) ∧
+         n2 ≥ 0 ∧ n2 < graph_nn ∧ ¬(graph_inc(n2, j) = 0))
+        → flow(n1) = flow(n2)
+    axiom junction1_effort: ∀(j : ℤ).
+        (j ≥ 0 ∧ j < graph_nc ∧ is_1junction(j) ∧ graph_nn ≥ 1)
+        → effort_sum(j, graph_nn - 1) = 0
+
+    // -----------------------------------------------------------------
+    // Constitutive equations (parametric — sources use symbolic input_var)
+    // -----------------------------------------------------------------
+
+    // Se: effort on net = input_var(k) for the k-th source
+    axiom source_effort: ∀(c : ℤ). ∀(n : ℤ). ∀(k : ℤ).
+        (c ≥ 0 ∧ c < graph_nc ∧ is_effort_source(c) ∧
+         n ≥ 0 ∧ n < graph_nn ∧ ¬(graph_inc(n, c) = 0) ∧
+         k ≥ 0 ∧ k < sim_ni ∧ sim_input_comp(k) = c)
+        → effort(n) = input_var(k)
+
+    // Sf: flow on net = input_var(k) for the k-th source
+    axiom source_flow: ∀(c : ℤ). ∀(n : ℤ). ∀(k : ℤ).
+        (c ≥ 0 ∧ c < graph_nc ∧ is_flow_source(c) ∧
+         n ≥ 0 ∧ n < graph_nn ∧ ¬(graph_inc(n, c) = 0) ∧
+         k ≥ 0 ∧ k < sim_ni ∧ sim_input_comp(k) = c)
+        → flow(n) = input_var(k)
+
+    // R: effort = R * flow (Ohm's law)
+    axiom resistor: ∀(c : ℤ). ∀(n : ℤ).
+        (c ≥ 0 ∧ c < graph_nc ∧ is_resistor(c) ∧
+         n ≥ 0 ∧ n < graph_nn ∧ ¬(graph_inc(n, c) = 0))
+        → effort(n) = graph_param(c, 0) * flow(n)
+
+    // -----------------------------------------------------------------
+    // State/input variable definitions (parametric — symbolic, not concrete)
+    // -----------------------------------------------------------------
+
+    // C: state variable = effort on connected net (symbolic)
+    axiom cap_state: ∀(i : ℤ).
+        (i ≥ 0 ∧ i < sim_ns ∧ is_capacitor(sim_state_comp(i)))
+        → effort(sim_state_net(i)) = state_var(i)
+
+    // I: state variable = flow on connected net (symbolic)
+    axiom iner_state: ∀(i : ℤ).
+        (i ≥ 0 ∧ i < sim_ns ∧ is_inertia(sim_state_comp(i)))
+        → flow(sim_state_net(i)) = state_var(i)
+
+    // -----------------------------------------------------------------
+    // Derivative equations
+    // -----------------------------------------------------------------
+
+    // C: deriv = flow / C
+    axiom cap_deriv: ∀(i : ℤ).
+        (i ≥ 0 ∧ i < sim_ns ∧ is_capacitor(sim_state_comp(i)))
+        → deriv(i) = flow(sim_state_net(i)) / graph_param(sim_state_comp(i), 0)
+
+    // I: deriv = effort / I
+    axiom iner_deriv: ∀(i : ℤ).
+        (i ≥ 0 ∧ i < sim_ns ∧ is_inertia(sim_state_comp(i)))
+        → deriv(i) = effort(sim_state_net(i)) / graph_param(sim_state_comp(i), 0)
+
+    // -----------------------------------------------------------------
+    // State-space linking: deriv[i] = A*state + B*input
+    // -----------------------------------------------------------------
+
+    axiom a_row_base: ∀(i : ℤ). (sim_ns ≥ 1)
+        → a_row_sum(i, 0) = sim_A(i, 0) * state_var(0)
+    axiom a_row_step: ∀(i : ℤ). ∀(j : ℤ).
+        (j ≥ 1 ∧ j < sim_ns)
+        → a_row_sum(i, j) = a_row_sum(i, j - 1) + sim_A(i, j) * state_var(j)
+
+    axiom b_row_base: ∀(i : ℤ). (sim_ni ≥ 1)
+        → b_row_sum(i, 0) = sim_B(i, 0) * input_var(0)
+    axiom b_row_step: ∀(i : ℤ). ∀(k : ℤ).
+        (k ≥ 1 ∧ k < sim_ni)
+        → b_row_sum(i, k) = b_row_sum(i, k - 1) + sim_B(i, k) * input_var(k)
+
+    axiom ss_link: ∀(i : ℤ). (i ≥ 0 ∧ i < sim_ns)
+        → deriv(i) = a_row_sum(i, sim_ns - 1) + b_row_sum(i, sim_ni - 1)
+}

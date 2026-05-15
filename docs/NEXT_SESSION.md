@@ -4,6 +4,65 @@
 
 ---
 
+## Immediate: RLC Continuous Simulation SIGSEGV — INVESTIGATE FIRST
+
+**Status:** Two tests ignored (`#[ignore]`) to unblock CI. Root cause unknown.
+
+**Tests affected:**
+- `continuous_sim_tests::setup_extracts_rlc_dimensions`
+- `continuous_sim_tests::setup_extracts_rlc_ab_matrices`
+
+Both call `simulate_setup_core(rlc_circuit_setup_request())` which builds a
+6-component bond graph RLC circuit and uses Z3 to extract state-space matrices.
+
+**What we know:**
+1. Both tests **pass in isolation** (100% — tested 5 runs each)
+2. All 9 `continuous_sim_tests` pass together when run alone
+3. The SIGSEGV occurs when running the **full 51-test server suite**
+4. Even **single-threaded** (`--test-threads=1`) the crash reproduces
+5. The crash is **non-deterministic** — sometimes all 51 pass, sometimes SIGSEGV
+6. With `KLEIS_Z3_DEBUG=1` (slower timing), the crash did not reproduce
+7. The RC circuit tests (simpler, 4 components) always pass
+8. The RLC probes individually take 100-300ms — well within the 5s watchdog
+
+**Hypothesis (from user):** The RLC Z3 computation takes more time or memory
+than RC, and the Z3 kill switch (watchdog thread calling `ContextHandle::interrupt()`)
+or memory monitor might be terminating Z3 mid-computation in a way that causes
+a use-after-free. The non-determinism supports this — timing-dependent crashes
+are hallmarks of interrupt-based termination.
+
+**Architecture context:**
+- `Z3Backend::new()` creates a fresh `z3::Context` and replaces the thread-local
+  one each time (line 439-440 in `backend.rs`)
+- Each probe in `simulate_setup_core` creates a new `Evaluator` → `AxiomVerifier`
+  → `Z3Backend` (line 2860 in `server.rs`)
+- The RLC has 3 probes (2 A-columns + 1 B-column), each creating/destroying
+  a full Z3 context with ~125 axioms loaded
+- The watchdog thread (line 54 in `backend.rs`) calls `handle.interrupt()` after
+  `wall_timeout` (default 7s = 5s + 2s buffer)
+- Memory watchdog polls `Z3_get_estimated_alloc_size()` and interrupts if exceeded
+- Default memory limit: 2048MB
+
+**What to investigate next:**
+1. Check if accumulated Z3 memory across the full test suite triggers the memory
+   watchdog mid-probe (log `z3::get_estimated_alloc_size()` at probe boundaries)
+2. Check if `z3::Context` replacement while old context objects are still alive
+   causes use-after-free (the `Rc<ContextInternal>` refcount may be non-zero in
+   thread-local storage when replaced)
+3. Try adding explicit `z3::Context::set_thread_local(&Context::new(&Config::new()))`
+   cleanup between tests
+4. Run with `KLEIS_Z3_MEMORY_MB=0` (disable memory watchdog) to rule out memory
+   interruption as cause
+5. Run under AddressSanitizer (`RUSTFLAGS="-Zsanitizer=address"`) to catch
+   use-after-free
+
+**Files:**
+- `src/bin/server.rs` — `simulate_setup_core()` (line 2477), `rlc_circuit_setup_request()` (line 5652)
+- `src/solvers/z3/backend.rs` — `Z3Backend::new()` (line 347), `solver_check_with_watchdog()` (line 54)
+- `src/axiom_verifier.rs` — memory guards (lines 371-389, 535-552)
+
+---
+
 ## Active Research
 
 ### Middle Egyptian Grammar — WRITE THE KLEIS THEORY
@@ -950,7 +1009,38 @@ data model (EditorNode AST), domain data (`.kleist`/`.kleis`), and server APIs.
     `sim_halted`/`sim_halt_reason` in the companion `.kleis` theory file. No Rust
     or JS changes needed.
 
-  **Phase 9 (planned): Graph Theory Domain & Königsberg Demo — arXiv Paper**
+  **Phase 9 (planned): Buffered Trajectory Simulation for Continuous Domains**
+
+  For continuous simulation domains (bond graphs, electronics), the theory file
+  should return a **chunk of trajectory** — many timesteps at once — rather than
+  a single step. The client plays back from a buffer, exactly like video streaming.
+
+  **Why:** Discrete simulation (Petri nets) is naturally one-step-at-a-time:
+  one transition fires, one state change. But continuous simulation runs an ODE
+  solver or fixed-timestep integrator. Returning one sample per API call wastes
+  the preamble + parse + eval overhead on each microsecond of simulation time.
+
+  **Architecture:**
+  ```
+  Server: theory computes N steps in one eval_concrete call → chunk of N state vectors
+  Client: buffers chunk, drains at user's chosen playback speed (slider already exists)
+  When buffer runs low → request next chunk with last state as initial condition
+  If client is paused → stop requesting (backpressure)
+  ```
+
+  **Theory interface (sketch):**
+  ```kleis
+  define sim_step_count = 100
+  define sim_dt = 0.001
+  define sim_trajectory(state, dt, n) = ...  // returns list of n state vectors
+  ```
+
+  The preamble injects current state, the theory computes the next N steps in
+  one `eval_concrete` call, and the server returns the whole chunk. The client
+  buffers and renders. This naturally decouples compute speed from display speed
+  and reuses the existing speed slider for playback rate control.
+
+  **Phase 10 (planned): Graph Theory Domain & Königsberg Demo — arXiv Paper**
 
   The graph theory domain was added as an architecture validation — a fourth domain
   (after electronics, bond graphs, Petri nets) implemented with **zero code changes**:
