@@ -19,7 +19,7 @@ operation graph_nc : ℤ
 operation graph_nn : ℤ
 operation graph_ctype : ℤ → ℤ
 operation graph_param : ℤ × ℤ → ℝ
-operation graph_inc : ℤ × ℤ → ℤ
+operation graph_inc : ℤ × ℤ → ℝ
 
 structure GraphData {
     axiom nc: graph_nc = 4
@@ -33,18 +33,18 @@ structure GraphData {
     axiom p2_0: graph_param(2, 0) = 100
     axiom p3_0: graph_param(3, 0) = 0.000001
 
-    axiom i_0_0: graph_inc(0, 0) = 1
-    axiom i_0_1: graph_inc(0, 1) = -1
-    axiom i_0_2: graph_inc(0, 2) = 0
-    axiom i_0_3: graph_inc(0, 3) = 0
-    axiom i_1_0: graph_inc(1, 0) = 0
-    axiom i_1_1: graph_inc(1, 1) = 1
-    axiom i_1_2: graph_inc(1, 2) = -1
-    axiom i_1_3: graph_inc(1, 3) = 0
-    axiom i_2_0: graph_inc(2, 0) = 0
-    axiom i_2_1: graph_inc(2, 1) = 1
-    axiom i_2_2: graph_inc(2, 2) = 0
-    axiom i_2_3: graph_inc(2, 3) = -1
+    axiom i_0_0: graph_inc(0, 0) = 1.0
+    axiom i_0_1: graph_inc(0, 1) = -1.0
+    axiom i_0_2: graph_inc(0, 2) = 0.0
+    axiom i_0_3: graph_inc(0, 3) = 0.0
+    axiom i_1_0: graph_inc(1, 0) = 0.0
+    axiom i_1_1: graph_inc(1, 1) = 1.0
+    axiom i_1_2: graph_inc(1, 2) = -1.0
+    axiom i_1_3: graph_inc(1, 3) = 0.0
+    axiom i_2_0: graph_inc(2, 0) = 0.0
+    axiom i_2_1: graph_inc(2, 1) = 1.0
+    axiom i_2_2: graph_inc(2, 2) = 0.0
+    axiom i_2_3: graph_inc(2, 3) = -1.0
 
     axiom tc_se: TYPE_EffortSource = 1
     axiom tc_j1: TYPE_Junction1 = 2
@@ -109,8 +109,8 @@ structure BondGraphDynamics {
 
     axiom junction0_effort: ∀(j : ℤ). ∀(n1 : ℤ). ∀(n2 : ℤ).
         (j ≥ 0 ∧ j < graph_nc ∧ is_0junction(j) ∧
-         n1 ≥ 0 ∧ n1 < graph_nn ∧ ¬(graph_inc(n1, j) = 0) ∧
-         n2 ≥ 0 ∧ n2 < graph_nn ∧ ¬(graph_inc(n2, j) = 0))
+         n1 ≥ 0 ∧ n1 < graph_nn ∧ ¬(graph_inc(n1, j) = 0.0) ∧
+         n2 ≥ 0 ∧ n2 < graph_nn ∧ ¬(graph_inc(n2, j) = 0.0))
         → effort(n1) = effort(n2)
     axiom junction0_flow: ∀(j : ℤ).
         (j ≥ 0 ∧ j < graph_nc ∧ is_0junction(j) ∧ graph_nn ≥ 1)
@@ -124,8 +124,8 @@ structure BondGraphDynamics {
 
     axiom junction1_flow: ∀(j : ℤ). ∀(n1 : ℤ). ∀(n2 : ℤ).
         (j ≥ 0 ∧ j < graph_nc ∧ is_1junction(j) ∧
-         n1 ≥ 0 ∧ n1 < graph_nn ∧ ¬(graph_inc(n1, j) = 0) ∧
-         n2 ≥ 0 ∧ n2 < graph_nn ∧ ¬(graph_inc(n2, j) = 0))
+         n1 ≥ 0 ∧ n1 < graph_nn ∧ ¬(graph_inc(n1, j) = 0.0) ∧
+         n2 ≥ 0 ∧ n2 < graph_nn ∧ ¬(graph_inc(n2, j) = 0.0))
         → flow(n1) = flow(n2)
     axiom junction1_effort: ∀(j : ℤ).
         (j ≥ 0 ∧ j < graph_nc ∧ is_1junction(j) ∧ graph_nn ≥ 1)
@@ -134,19 +134,19 @@ structure BondGraphDynamics {
     // Sources use symbolic input_var(k) instead of concrete graph_param
     axiom source_effort: ∀(c : ℤ). ∀(n : ℤ). ∀(k : ℤ).
         (c ≥ 0 ∧ c < graph_nc ∧ is_effort_source(c) ∧
-         n ≥ 0 ∧ n < graph_nn ∧ ¬(graph_inc(n, c) = 0) ∧
+         n ≥ 0 ∧ n < graph_nn ∧ ¬(graph_inc(n, c) = 0.0) ∧
          k ≥ 0 ∧ k < sim_ni ∧ sim_input_comp(k) = c)
         → effort(n) = input_var(k)
 
     axiom source_flow: ∀(c : ℤ). ∀(n : ℤ). ∀(k : ℤ).
         (c ≥ 0 ∧ c < graph_nc ∧ is_flow_source(c) ∧
-         n ≥ 0 ∧ n < graph_nn ∧ ¬(graph_inc(n, c) = 0) ∧
+         n ≥ 0 ∧ n < graph_nn ∧ ¬(graph_inc(n, c) = 0.0) ∧
          k ≥ 0 ∧ k < sim_ni ∧ sim_input_comp(k) = c)
         → flow(n) = input_var(k)
 
     axiom resistor: ∀(c : ℤ). ∀(n : ℤ).
         (c ≥ 0 ∧ c < graph_nc ∧ is_resistor(c) ∧
-         n ≥ 0 ∧ n < graph_nn ∧ ¬(graph_inc(n, c) = 0))
+         n ≥ 0 ∧ n < graph_nn ∧ ¬(graph_inc(n, c) = 0.0))
         → effort(n) = graph_param(c, 0) * flow(n)
 
     // Storage elements bind effort/flow to symbolic state_var

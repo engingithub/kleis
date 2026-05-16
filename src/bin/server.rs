@@ -2331,7 +2331,7 @@ fn build_graph_preamble(req: &VerifyGraphRequest, theory_source: &str) -> String
     preamble.push_str("operation graph_nn : ℤ\n");
     preamble.push_str("operation graph_ctype : ℤ → ℤ\n");
     preamble.push_str("operation graph_param : ℤ × ℤ → ℝ\n");
-    preamble.push_str("operation graph_inc : ℤ × ℤ → ℤ\n");
+    preamble.push_str("operation graph_inc : ℤ × ℤ → ℝ\n");
     preamble.push_str("\n");
 
     // Emit operation declarations only for TYPE_X not declared by the theory.
@@ -2408,7 +2408,7 @@ fn build_graph_preamble(req: &VerifyGraphRequest, theory_source: &str) -> String
         for comp in 0..nc {
             let val = inc.get(&(net, comp)).copied().unwrap_or(0);
             preamble.push_str(&format!(
-                "    axiom inc_{net}_{comp}: graph_inc({net}, {comp}) = {val}\n"
+                "    axiom inc_{net}_{comp}: graph_inc({net}, {comp}) = {val}.0\n"
             ));
         }
     }
@@ -3838,19 +3838,19 @@ mod verify_graph_tests {
     fn preamble_emits_component_level_incidence() {
         let preamble = build_graph_preamble(&petri_linear_workflow(), "");
         assert!(
-            preamble.contains("graph_inc(0, 0) = 1"),
+            preamble.contains("graph_inc(0, 0) = 1.0"),
             "c0 source of net 0"
         );
         assert!(
-            preamble.contains("graph_inc(0, 1) = -1"),
+            preamble.contains("graph_inc(0, 1) = -1.0"),
             "c1 target of net 0"
         );
         assert!(
-            preamble.contains("graph_inc(1, 1) = 1"),
+            preamble.contains("graph_inc(1, 1) = 1.0"),
             "c1 source of net 1"
         );
         assert!(
-            preamble.contains("graph_inc(1, 2) = -1"),
+            preamble.contains("graph_inc(1, 2) = -1.0"),
             "c2 target of net 1"
         );
     }
@@ -4134,19 +4134,19 @@ mod verify_graph_tests {
         };
         let preamble = build_graph_preamble(&req, "");
         assert!(
-            preamble.contains("graph_inc(0, 0) = 1"),
+            preamble.contains("graph_inc(0, 0) = 1.0"),
             "c0 source of net 0"
         );
         assert!(
-            preamble.contains("graph_inc(0, 1) = -1"),
+            preamble.contains("graph_inc(0, 1) = -1.0"),
             "c1 target of net 0"
         );
         assert!(
-            preamble.contains("graph_inc(1, 1) = 1"),
+            preamble.contains("graph_inc(1, 1) = 1.0"),
             "c1 source of net 1"
         );
         assert!(
-            preamble.contains("graph_inc(1, 0) = -1"),
+            preamble.contains("graph_inc(1, 0) = -1.0"),
             "c0 target of net 1"
         );
     }
@@ -4185,19 +4185,19 @@ mod verify_graph_tests {
         assert!(preamble.contains("graph_nc = 4"), "4 components");
         assert!(preamble.contains("graph_nn = 3"), "3 nets");
         assert!(
-            preamble.contains("graph_inc(1, 1) = 1"),
+            preamble.contains("graph_inc(1, 1) = 1.0"),
             "c1 source of net 1"
         );
         assert!(
-            preamble.contains("graph_inc(1, 2) = -1"),
+            preamble.contains("graph_inc(1, 2) = -1.0"),
             "c2 target of net 1"
         );
         assert!(
-            preamble.contains("graph_inc(2, 1) = 1"),
+            preamble.contains("graph_inc(2, 1) = 1.0"),
             "c1 source of net 2"
         );
         assert!(
-            preamble.contains("graph_inc(2, 3) = -1"),
+            preamble.contains("graph_inc(2, 3) = -1.0"),
             "c3 target of net 2"
         );
     }
@@ -5739,7 +5739,6 @@ mod continuous_sim_tests {
     }
 
     #[test]
-    #[ignore = "SIGSEGV when run with full suite — passes in isolation, see NEXT_SESSION.md"]
     fn setup_extracts_rlc_dimensions() {
         let resp = simulate_setup_core(rlc_circuit_setup_request());
         if let Some(e) = &resp.error {
@@ -5751,7 +5750,6 @@ mod continuous_sim_tests {
     }
 
     #[test]
-    #[ignore = "SIGSEGV when run with full suite — passes in isolation, see NEXT_SESSION.md"]
     fn setup_extracts_rlc_ab_matrices() {
         let resp = simulate_setup_core(rlc_circuit_setup_request());
         assert!(resp.error.is_none(), "error: {:?}", resp.error);

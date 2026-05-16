@@ -70,9 +70,9 @@ example "NO EFFORT CONFLICT ON 0-JUNCTION: no two effort sources on same junctio
          s2 ≥ 0 ∧ s2 < graph_nc ∧ is_effort_source(s2) ∧
          ¬(s1 = s2))
         → ¬(∃(n1 : ℤ). n1 ≥ 0 ∧ n1 < graph_nn ∧
-              ¬(graph_inc(n1, j) = 0) ∧ ¬(graph_inc(n1, s1) = 0) ∧
+              ¬(graph_inc(n1, j) = 0.0) ∧ ¬(graph_inc(n1, s1) = 0.0) ∧
               ∃(n2 : ℤ). n2 ≥ 0 ∧ n2 < graph_nn ∧
-              ¬(graph_inc(n2, j) = 0) ∧ ¬(graph_inc(n2, s2) = 0)))
+              ¬(graph_inc(n2, j) = 0.0) ∧ ¬(graph_inc(n2, s2) = 0.0)))
 }
 
 example "NO FLOW CONFLICT ON 1-JUNCTION: no two flow sources on same junction" {
@@ -82,14 +82,14 @@ example "NO FLOW CONFLICT ON 1-JUNCTION: no two flow sources on same junction" {
          s2 ≥ 0 ∧ s2 < graph_nc ∧ is_flow_source(s2) ∧
          ¬(s1 = s2))
         → ¬(∃(n1 : ℤ). n1 ≥ 0 ∧ n1 < graph_nn ∧
-              ¬(graph_inc(n1, j) = 0) ∧ ¬(graph_inc(n1, s1) = 0) ∧
+              ¬(graph_inc(n1, j) = 0.0) ∧ ¬(graph_inc(n1, s1) = 0.0) ∧
               ∃(n2 : ℤ). n2 ≥ 0 ∧ n2 < graph_nn ∧
-              ¬(graph_inc(n2, j) = 0) ∧ ¬(graph_inc(n2, s2) = 0)))
+              ¬(graph_inc(n2, j) = 0.0) ∧ ¬(graph_inc(n2, s2) = 0.0)))
 }
 
 example "1-PORT CONNECTIVITY: every 1-port element has at least one bond" {
     assert(∀(c : ℤ). (c ≥ 0 ∧ c < graph_nc ∧ is_1port(c))
-        → ∃(n : ℤ). n ≥ 0 ∧ n < graph_nn ∧ ¬(graph_inc(n, c) = 0))
+        → ∃(n : ℤ). n ≥ 0 ∧ n < graph_nn ∧ ¬(graph_inc(n, c) = 0.0))
 }
 
 example "2-PORT CONNECTIVITY: every transformer/gyrator has at least two bonds" {
@@ -98,7 +98,7 @@ example "2-PORT CONNECTIVITY: every transformer/gyrator has at least two bonds" 
             n1 ≥ 0 ∧ n1 < graph_nn ∧
             n2 ≥ 0 ∧ n2 < graph_nn ∧
             ¬(n1 = n2) ∧
-            ¬(graph_inc(n1, c) = 0) ∧ ¬(graph_inc(n2, c) = 0))
+            ¬(graph_inc(n1, c) = 0.0) ∧ ¬(graph_inc(n2, c) = 0.0))
 }
 
 example "JUNCTION HAS BONDS: every junction connects to at least 2 elements" {
@@ -107,7 +107,7 @@ example "JUNCTION HAS BONDS: every junction connects to at least 2 elements" {
             n1 ≥ 0 ∧ n1 < graph_nn ∧
             n2 ≥ 0 ∧ n2 < graph_nn ∧
             ¬(n1 = n2) ∧
-            ¬(graph_inc(n1, j) = 0) ∧ ¬(graph_inc(n2, j) = 0))
+            ¬(graph_inc(n1, j) = 0.0) ∧ ¬(graph_inc(n2, j) = 0.0))
 }
 
 // =============================================================================
@@ -412,8 +412,8 @@ structure BondGraphDynamics {
     // 0-junction: common effort, flows sum to zero
     axiom junction0_effort: ∀(j : ℤ). ∀(n1 : ℤ). ∀(n2 : ℤ).
         (j ≥ 0 ∧ j < graph_nc ∧ is_0junction(j) ∧
-         n1 ≥ 0 ∧ n1 < graph_nn ∧ ¬(graph_inc(n1, j) = 0) ∧
-         n2 ≥ 0 ∧ n2 < graph_nn ∧ ¬(graph_inc(n2, j) = 0))
+         n1 ≥ 0 ∧ n1 < graph_nn ∧ ¬(graph_inc(n1, j) = 0.0) ∧
+         n2 ≥ 0 ∧ n2 < graph_nn ∧ ¬(graph_inc(n2, j) = 0.0))
         → effort(n1) = effort(n2)
     axiom junction0_flow: ∀(j : ℤ).
         (j ≥ 0 ∧ j < graph_nc ∧ is_0junction(j) ∧ graph_nn ≥ 1)
@@ -428,8 +428,8 @@ structure BondGraphDynamics {
     // 1-junction: common flow, efforts sum to zero
     axiom junction1_flow: ∀(j : ℤ). ∀(n1 : ℤ). ∀(n2 : ℤ).
         (j ≥ 0 ∧ j < graph_nc ∧ is_1junction(j) ∧
-         n1 ≥ 0 ∧ n1 < graph_nn ∧ ¬(graph_inc(n1, j) = 0) ∧
-         n2 ≥ 0 ∧ n2 < graph_nn ∧ ¬(graph_inc(n2, j) = 0))
+         n1 ≥ 0 ∧ n1 < graph_nn ∧ ¬(graph_inc(n1, j) = 0.0) ∧
+         n2 ≥ 0 ∧ n2 < graph_nn ∧ ¬(graph_inc(n2, j) = 0.0))
         → flow(n1) = flow(n2)
     axiom junction1_effort: ∀(j : ℤ).
         (j ≥ 0 ∧ j < graph_nc ∧ is_1junction(j) ∧ graph_nn ≥ 1)
@@ -442,21 +442,21 @@ structure BondGraphDynamics {
     // Se: effort on net = input_var(k) for the k-th source
     axiom source_effort: ∀(c : ℤ). ∀(n : ℤ). ∀(k : ℤ).
         (c ≥ 0 ∧ c < graph_nc ∧ is_effort_source(c) ∧
-         n ≥ 0 ∧ n < graph_nn ∧ ¬(graph_inc(n, c) = 0) ∧
+         n ≥ 0 ∧ n < graph_nn ∧ ¬(graph_inc(n, c) = 0.0) ∧
          k ≥ 0 ∧ k < sim_ni ∧ sim_input_comp(k) = c)
         → effort(n) = input_var(k)
 
     // Sf: flow on net = input_var(k) for the k-th source
     axiom source_flow: ∀(c : ℤ). ∀(n : ℤ). ∀(k : ℤ).
         (c ≥ 0 ∧ c < graph_nc ∧ is_flow_source(c) ∧
-         n ≥ 0 ∧ n < graph_nn ∧ ¬(graph_inc(n, c) = 0) ∧
+         n ≥ 0 ∧ n < graph_nn ∧ ¬(graph_inc(n, c) = 0.0) ∧
          k ≥ 0 ∧ k < sim_ni ∧ sim_input_comp(k) = c)
         → flow(n) = input_var(k)
 
     // R: effort = R * flow (Ohm's law)
     axiom resistor: ∀(c : ℤ). ∀(n : ℤ).
         (c ≥ 0 ∧ c < graph_nc ∧ is_resistor(c) ∧
-         n ≥ 0 ∧ n < graph_nn ∧ ¬(graph_inc(n, c) = 0))
+         n ≥ 0 ∧ n < graph_nn ∧ ¬(graph_inc(n, c) = 0.0))
         → effort(n) = graph_param(c, 0) * flow(n)
 
     // -----------------------------------------------------------------

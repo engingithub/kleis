@@ -65,8 +65,8 @@ example "NO PARALLEL VOLTAGE SOURCES: no two voltage sources share both nets" {
          s2 ≥ 0 ∧ s2 < graph_nc ∧ is_voltage_source(s2) ∧
          ¬(s1 = s2))
         → ∃(n : ℤ). n ≥ 0 ∧ n < graph_nn ∧
-            ((¬(graph_inc(n, s1) = 0) ∧ graph_inc(n, s2) = 0) ∨
-             (graph_inc(n, s1) = 0 ∧ ¬(graph_inc(n, s2) = 0))))
+            ((¬(graph_inc(n, s1) = 0.0) ∧ graph_inc(n, s2) = 0.0) ∨
+             (graph_inc(n, s1) = 0.0 ∧ ¬(graph_inc(n, s2) = 0.0))))
 }
 
 example "NO SERIES CURRENT SOURCES: no two current sources on the same net" {
@@ -75,5 +75,5 @@ example "NO SERIES CURRENT SOURCES: no two current sources on the same net" {
          s2 ≥ 0 ∧ s2 < graph_nc ∧ is_current_source(s2) ∧
          ¬(s1 = s2) ∧
          n ≥ 0 ∧ n < graph_nn)
-        → ¬(¬(graph_inc(n, s1) = 0) ∧ ¬(graph_inc(n, s2) = 0)))
+        → ¬(¬(graph_inc(n, s1) = 0.0) ∧ ¬(graph_inc(n, s2) = 0.0)))
 }

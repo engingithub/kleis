@@ -58,8 +58,8 @@ example "BIPARTITE: every arc crosses place/transition boundary" {
          c1 ≥ 0 ∧ c1 < graph_nc ∧
          c2 ≥ 0 ∧ c2 < graph_nc ∧
          ¬(c1 = c2) ∧
-         ¬(graph_inc(n, c1) = 0) ∧
-         ¬(graph_inc(n, c2) = 0))
+         ¬(graph_inc(n, c1) = 0.0) ∧
+         ¬(graph_inc(n, c2) = 0.0))
         → ¬(is_place(c1) ∧ is_place(c2)) ∧ ¬(is_transition(c1) ∧ is_transition(c2)))
 }
 

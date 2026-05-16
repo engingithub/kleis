@@ -20,7 +20,7 @@ operation TYPE_Node : ℤ
 define is_node(c) = graph_ctype(c) = TYPE_Node
 
 // A node is incident to an edge if graph_inc is non-zero
-define incident(n, c) = ¬(graph_inc(n, c) = 0)
+define incident(n, c) = ¬(graph_inc(n, c) = 0.0)
 
 // =============================================================================
 // Structural verification — checked by Z3
