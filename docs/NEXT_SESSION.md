@@ -1045,6 +1045,98 @@ data model (EditorNode AST), domain data (`.kleist`/`.kleis`), and server APIs.
 - **Graph ↔ Equation composition** — can graphs contain equations? Can equations
   embed graphs? Needs design work.
 
+**PRIORITY: Connector / wiring UX issues:**
+
+- **Waypoint manipulation is buggy** — moving, adding, and removing waypoints on
+  existing connectors does not work reliably. Hit testing on segments and waypoint
+  handles needs debugging. Coordinate transforms and snap-to-grid interaction may
+  be the root cause.
+- **Only Manhattan routing implemented** — orthogonal (right-angle) routing is the
+  only connector type. Missing: straight lines (graph theory), curved/spline
+  (bond graphs), auto-routing around obstacles. Manhattan routing itself needs
+  improvement: obstacle avoidance, clean re-routing when components are dragged,
+  minimum segment lengths to prevent zero-length collapse.
+- **Electronics connector behavior is hard to understand** — the interaction model
+  for wiring electronic components is confusing. Needs a UX review: what happens
+  on click, drag, release at each stage of connection creation. Consider visual
+  feedback (highlight valid ports, show snap targets, preview wire path).
+- **These are the highest-impact UX issues** — if users can't reliably draw and
+  adjust wires, the graph editor is frustrating regardless of backend power.
+  Fix connector UX before adding new domains or features.
+
+**PRIORITY: Domain feature completeness:**
+
+- **Petri Nets — only linear workflows** — current implementation cannot model
+  branching, concurrency, or conflict resolution. Real-world workflows need:
+  fork/join (parallel execution), choice/merge (decision points), weighted arcs,
+  inhibitor arcs, and token colors for distinguishing resource types.
+- **Electronics — needs significant attention** — more components (op-amps,
+  transformers, dependent sources), proper ground handling, multi-node circuits
+  beyond simple series/parallel, better simulation visualization, reliable
+  oscilloscope across circuit topologies.
+
+**THEORY: Nonlinear elements via topology/causality invariance:**
+
+The constitutive equation of a component can change (linear → nonlinear) without
+affecting the graph topology or causality assignment. This is the architectural
+separation:
+
+1. **Topology** (incidence matrix, KVL, KCL) — graph property, invariant
+2. **Causality** (which variable imposed, which derived) — topological, depends
+   on component *type*, not on the constitutive equation
+3. **Constitutive relation** (V=IR vs I=I_s*(exp(V/V_t)-1)) — pluggable, does
+   not change the structural verification layer
+
+A nonlinear resistor has the same causality as a linear one. A diode, a BJT,
+a MOSFET — they all occupy the same position in the incidence matrix and obey
+the same KVL/KCL constraints. Only the port equation changes.
+
+**This principle extends beyond electronics.** Geometric nonlinearities on
+airplane control surfaces are the same pattern: the topology of the control
+linkage (which surface connects to which actuator) and the causality (which
+variable is commanded, which is derived) remain fixed. The nonlinearity is in
+the constitutive relation — the hinge moment as a nonlinear function of
+deflection angle, dynamic pressure, and Mach number. The graph structure
+(actuator → linkage → surface → aerodynamic load) is invariant.
+
+**Develop a Kleis theory** that formalizes this separation:
+- Structure for topology (incidence matrix, conservation laws)
+- Structure for causality (effort/flow assignment, SCAP)
+- Parametric structure for constitutive relations (pluggable equations)
+- Prove: topology verification and causality assignment are independent of
+  the constitutive relation
+- Instantiate for: electronics (linear + nonlinear), bond graphs, and
+  flight control surface linkages as a non-electrical example
+
+**Envelope inference from constitutive relations:**
+
+Once the constitutive relation is parametric (depends on operating conditions),
+Z3 can infer the **operating envelope** where the system remains stable, well-posed,
+or satisfies safety constraints. The topology and causality are fixed; the question
+becomes: "for what range of parameters does the system maintain property X?"
+
+- **Flight control:** Given nonlinear hinge moment C_h(δ, q, M), Z3 can find the
+  (q, M) region where the control authority is sufficient: ∃δ such that the required
+  moment is achievable. The boundary of that region IS the flight envelope for that
+  control surface. Flutter boundaries, control reversal speed — all expressible as
+  satisfiability queries over the constitutive relation.
+- **Electronics:** Given a nonlinear amplifier, find the input voltage range where
+  the circuit remains in the linear operating region (transistors not saturated,
+  op-amps not clipping). The boundary IS the dynamic range envelope.
+- **Bond graphs / mechanical systems:** Given a nonlinear spring or damper, find
+  the force/displacement range where energy dissipation remains positive (passivity
+  envelope). Beyond that boundary, the element can inject energy — instability.
+- **Petri nets / workflows:** Given resource constraints (token limits, processing
+  times), find the throughput range where the workflow completes without deadlock.
+  The boundary IS the capacity envelope.
+
+**The general pattern:** topology + causality define the system structure.
+Constitutive relations parametrize the behavior. Z3 queries over the parameters
+yield the envelope — the boundary between "the system works" and "the system
+fails." This is domain-agnostic: the same Kleis theory structure works for
+flight envelopes, safe operating areas, passivity boundaries, and workflow
+capacity limits.
+
   **Key insight: equations inside components shift verification from structural to behavioral.**
   Currently `component_type` is ground truth for SCAP causality and conflict checks.
   Once users can write constitutive equations inside components (e.g., `e = R * f`

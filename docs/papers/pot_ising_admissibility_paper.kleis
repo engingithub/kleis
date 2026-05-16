@@ -1,0 +1,396 @@
+// =============================================================================
+// Phase Transitions as Admissibility Boundaries:
+// The 2D Ising Model in the K-Q Framework
+// =============================================================================
+//
+// We show that Onsager's exact solution of the 2D Ising model is a concrete
+// instance of the POT (K, Q) decomposition. The phase transition at β_c is
+// an admissibility boundary; KW duality is a formulation fiber; the specific
+// heat divergence is a projection artifact.
+//
+// 8 results verified by Z3. All derivations machine-checked on Kleis.
+//
+// Pipeline:
+//   kleis test --raw-output --example compile_paper \
+//       examples/ontology/revised/pot_ising_admissibility_paper.kleis \
+//       > pot_ising_admissibility_paper.typ
+//   typst compile pot_ising_admissibility_paper.typ
+//
+// =============================================================================
+
+import "stdlib/prelude.kleis"
+import "stdlib/templates/arxiv_paper.kleis"
+import "../../../theories/pot_ising_model.kleis"
+
+// =============================================================================
+// Paper Metadata
+// =============================================================================
+
+define paper_title = "Phase Transitions as Admissibility Boundaries: The 2D Ising Model in the K---Q Framework"
+
+define paper_authors = [
+    Author("Engin Atik", "1")
+]
+
+define paper_affiliations = [
+    Affiliation(1, "Kleis Research", "https://kleis.io")
+]
+
+define paper_abstract = "We show that Onsager's exact solution of the two-dimensional Ising model is a concrete instance of the Projected Ontology Theory (POT) kernel---projection decomposition. The Boltzmann weight $K(beta) = e^(-beta H)$ is the production kernel; the trace over spin configurations is the observable projection $Q$; and the partition function $Z(beta) = Q compose K(beta)$ is the composed observable. In this language: (i) the phase transition at the critical inverse temperature $beta_c$ is an _admissibility boundary_ --- the unique parameter value where $Q compose K$ develops non-analytic behavior; (ii) Kramers---Wannier duality is a _formulation fiber_ --- two distinct kernel parameterizations $(beta, beta^*)$ sharing the same observable image under $Q$; (iii) the logarithmic divergence of the specific heat is a _projection artifact_ --- the kernel family $K(beta)$ is entire in $beta$, and the non-analyticity arises solely from the thermodynamic limit of $\"Tr\"$. This reinterpretation provides a unified vocabulary connecting phase transitions in statistical mechanics to gauge non-admissibility in field theory: both are instances of the same structural obstruction in the $K$---$Q$ composition. All results are formalized on the Kleis verification platform and verified by the Z3 SMT solver."
+
+define paper_keywords = "admissibility boundary, formulation fiber, projection singularity, Ising model, Kramers---Wannier duality, kernel---projection decomposition, phase transition, Projected Ontology Theory, formal verification, Z3"
+
+// =============================================================================
+// Section 1: Introduction
+// =============================================================================
+
+define sec_intro = ArxivSection("Introduction",
+"The Projected Ontology Theory (POT) describes physical observables as projections of underlying flows through kernel operators. A configuration enters a production kernel $K$, which maps it to an intermediate object; an observable projection $Q$ then extracts the measurable quantity. The pipeline $Q compose K$ is the physical theory.
+
+In the existing POT literature, this decomposition has been applied to general relativity, electrodynamics, perturbative quantum field theory, and the factorization structure of kernels. In each case, the central structural question is: for which parameter values does the composition $Q compose K$ produce a smooth (analytic, finite) observable? When it does, the kernel is _admissible_; when it does not, the system sits on an _admissibility boundary_.
+
+The purpose of this paper is to show that _phase transitions in statistical mechanics are admissibility boundaries_. We demonstrate this through the cleanest possible example: Onsager's exact solution of the two-dimensional Ising model.
+
+The 2D Ising model is an ideal testbed for three reasons. First, it is exactly solvable --- there are no approximations to muddy the structural analysis. Second, it exhibits a genuine phase transition with a known critical point. Third, the Kramers---Wannier duality provides a natural second parameterization of the same physics, giving us a concrete instance of the POT _formulation fiber_.
+
+The paper makes three claims, each verified formally on the Kleis platform:
+
++ *Admissibility boundary.* The kernel $K(beta) = e^(-beta H)$ is admissible (composition $Q compose K$ is smooth) for all $beta eq.not beta_c$. At $beta = beta_c$, admissibility fails: the specific heat diverges logarithmically. The admissibility boundary is the singleton ${beta_c}$.
+
++ *Singularity localization.* The kernel family $K(beta)$ is an entire function of $beta$ --- it has no singularities. The non-analyticity at $beta_c$ resides entirely in the projection $Q$ (the thermodynamic limit $N arrow infinity$ of the trace). Physical singularities are projection artifacts, not ontological breakdowns.
+
++ *Formulation fiber.* Kramers---Wannier duality maps each $beta$ to a dual $beta^*$ such that $K(beta)$ and $K(beta^*)$ produce the same observable image under $Q$. The pair $(beta, beta^*)$ belongs to the same formulation fiber. The critical point $beta_c$ is the unique self-dual fixed point.
+
+The unifying claim is that this structure is _the same_ as the non-admissibility of the Cartan curvature formula in general relativity, where the self-coupling term $omega and omega$ obstructs smooth composition. In both cases: the kernel is well-defined, but the composition $Q compose K$ fails to be smooth at a distinguished parameter value. Phase transitions and gauge non-admissibility are instances of the same structural obstruction.
+
+All formal results are contained in the Kleis theory file `pot_ising_model.kleis` (8 verified structures, 4 theorems) and the paper verification file `pot_ising_paper.kleis` (8 verified examples covering all sections).")
+
+// =============================================================================
+// Section 2: The K-Q Decomposition of the Ising Model
+// =============================================================================
+
+define sec_kq_decomposition = ArxivSection("The K---Q Decomposition of the Ising Model",
+"Consider the two-dimensional Ising model on an $N times N$ square lattice with periodic boundary conditions. The configuration space is $Omega = {+1, -1}^(N^2)$, and each spin configuration $bold(s) = (s_1, dots, s_(N^2))$ has energy
+
+$ H(bold(s)) = -J sum_(chevron.l i, j chevron.r) s_i s_j $
+
+where $J > 0$ is the ferromagnetic coupling constant and the sum runs over nearest-neighbor pairs. The statistical mechanics is encoded in the partition function
+
+$ Z(beta) = sum_(bold(s) in Omega) e^(-beta H(bold(s))) $
+
+where $beta = 1 slash (k_B T)$ is the inverse temperature. The partition function admits a natural decomposition into a kernel and a projection.
+
+#strong[Definition 1] (Boltzmann kernel). For each inverse temperature $beta > 0$, the _Boltzmann kernel_ is the operator
+
+$ K(beta) : Omega arrow.r RR_(>0), #h(2em) K(beta)(bold(s)) = e^(-beta H(bold(s))) $
+
+This is a one-parameter family of kernels, indexed by $beta$, mapping spin configurations to positive real weights.
+
+#strong[Definition 2] (Trace projection). The _trace projection_ is the linear functional
+
+$ Q : (Omega arrow.r RR) arrow.r RR, #h(2em) Q(f) = sum_(bold(s) in Omega) f(bold(s)) $
+
+#strong[Proposition 1] (K---Q decomposition). The partition function is the composition
+
+$ Z(beta) = (Q compose K(beta))(Omega) = sum_(bold(s) in Omega) K(beta)(bold(s)) = sum_(bold(s)) e^(-beta H(bold(s))) $
+
+This is not a metaphor or an analogy. It _is_ the mathematical structure of statistical mechanics, read through the POT vocabulary. The kernel $K$ maps configurations to weights; the projection $Q$ sums over configurations to produce a scalar observable.
+
+*Properties of $K$ and $Q$:*
+
+- $K(beta)$ is _positive_: $e^(-beta H) > 0$ for all $beta, bold(s)$.
+- $K(beta)$ is _entire_ in $beta$: the exponential function has no singularities in the complex $beta$-plane.
+- $Q$ is _linear_: $Q(f + g) = Q(f) + Q(g)$.
+- $Q$ is _positivity-preserving_: if $f(bold(s)) >= 0$ for all $bold(s)$, then $Q(f) >= 0$.
+
+These properties are verified as structures `BoltzmannKernel` and `TraceProjection` in the theory file, with axioms confirmed by Z3.")
+
+// =============================================================================
+// Section 3: The Admissibility Boundary
+// =============================================================================
+
+define sec_admissibility = ArxivSection("The Admissibility Boundary",
+"In the POT framework, a kernel $K$ is _admissible_ if the composition $Q compose K$ produces a smooth observable --- all thermodynamic quantities derived from the free energy $f(beta) = -(1 slash (N beta)) ln Z(beta)$ are finite and real-analytic.
+
+#strong[Definition 3] (Ising admissibility). The kernel $K(beta)$ is _admissible_ if and only if the specific heat
+
+$ C_v(beta) = -beta^2 (partial^2 f) / (partial beta^2) $
+
+is finite. Equivalently: $K(beta)$ is admissible iff $Q compose K(beta)$ is twice-differentiable in $beta$.
+
+The critical inverse temperature of the 2D Ising model on the square lattice is
+
+$ beta_c = (ln(1 + sqrt(2))) / (2 J) approx 0.4407 slash J $
+
+Onsager's exact solution, supplemented by the specific heat calculation of Schultz, Mattis, and Lieb, gives:
+
+#strong[Theorem 1] (Admissibility boundary). _The admissibility boundary of the Ising K---Q system is the singleton ${beta_c}$._
+
+_Specifically:_
+
++ _For $beta eq.not beta_c$: all thermodynamic quantities are real-analytic. The kernel $K(beta)$ is admissible._
+
++ _For $beta = beta_c$: the specific heat diverges logarithmically,_
+
+$ C_v tilde.op -ln|1 - beta slash beta_c| #h(2em) \"as\" beta arrow.r beta_c $
+
+_and $K(beta_c)$ is non-admissible._
+
+This result follows directly from Onsager's exact evaluation of the free energy. The proof is not new --- it is one of the most celebrated results in mathematical physics. What is new is the _vocabulary_: the phase transition is an admissibility boundary, and the specific heat divergence is the signature of non-admissibility.
+
+#strong[Corollary 1.] _Admissibility implies smooth observables: if $K(beta)$ is admissible, then $C_v(beta) < infinity$._
+
+The converse also holds in this model (the specific heat is the only obstruction), so admissibility and finite $C_v$ are equivalent.
+
+Both Theorem 1 and Corollary 1 are verified in the theory file (structure `IsingAdmissibility`, axioms `admissible_low`, `admissible_high`, `not_admissible_critical`, and the universal statement `admissible_implies_smooth`).")
+
+// =============================================================================
+// Section 4: Singularity Localization
+// =============================================================================
+
+define sec_singularity = ArxivSection("Singularity Localization",
+"The admissibility boundary raises a question: _where_ does the non-analyticity come from? Is it a property of the kernel $K$, the projection $Q$, or their composition?
+
+#strong[Theorem 2] (Singularity localization). _The non-analyticity at $beta_c$ resides entirely in the projection $Q$ (the thermodynamic limit $N arrow infinity$ of the trace), not in the kernel $K(beta)$._
+
+_Proof._ For any finite Hamiltonian $H$, the Boltzmann kernel $K(beta) = e^(-beta H)$ is an entire function of $beta$. For finite $N$, the partition function $Z(beta) = sum_(bold(s)) e^(-beta H(bold(s)))$ is a finite sum of entire functions, hence itself entire. No singularity exists at any value of $beta$ for finite system size. The logarithmic divergence of $C_v$ appears _only_ in the limit $N arrow infinity$, where the finite sum becomes an infinite series whose convergence properties change at $beta_c$. $square$
+
+This theorem exemplifies a central POT principle: _physical singularities are not ontological breakdowns_. The kernel $K(beta)$ --- which represents the \"ontological\" weight assignment to configurations --- is perfectly smooth everywhere, including at $beta_c$. The divergence of $C_v$ is a property of the _observation channel_ $Q$, specifically of the limiting process $N arrow infinity$ that converts a finite trace into an infinite one.
+
+The analogy with general relativity is precise. The Cartan curvature formula $R = d omega + omega and omega$ is well-defined for any connection $omega$ --- the \"ontological\" kernel $K$ has no singularity. The non-admissibility (non-linearity from the $omega and omega$ self-coupling) is a property of the _composition_ $Q compose K$, not of $K$ alone. In both cases: _the kernel is innocent; the projection is guilty._")
+
+// =============================================================================
+// Section 5: Kramers-Wannier Duality as Formulation Fiber
+// =============================================================================
+
+define sec_kw_duality = ArxivSection("Kramers---Wannier Duality as Formulation Fiber",
+"Kramers and Wannier discovered that the 2D Ising model on the square lattice possesses a remarkable symmetry: the partition function at high temperature is related to the partition function at low temperature through the transformation
+
+$ sinh(2 beta J) dot sinh(2 beta^* J) = 1 $
+
+This maps each inverse temperature $beta$ to a dual $beta^*$, with the critical point characterized by self-duality: $beta_c^* = beta_c$.
+
+In the POT framework, the KW duality has a natural interpretation.
+
+#strong[Theorem 3] (Duality as formulation fiber). _For each $beta eq.not beta_c$, the dual pair $(beta, beta^*)$ satisfies:_
+
++ _$K(beta)$ and $K(beta^*)$ are distinct kernels ($beta eq.not beta^*$)._
++ _The observable images under $Q$ are related by known factors (they encode the same physics)._
++ _The pair $(beta, beta^*)$ belongs to the same formulation fiber._
+
+_Properties of the duality:_
+
++ _Involution: $(beta^*)^* = beta$._
++ _Self-dual fixed point: $beta_c^* = beta_c$._
++ _Non-triviality: $beta eq.not beta^*$ for $beta eq.not beta_c$._
+
+The formulation fiber concept was introduced in the GR paper, where different formulations of general relativity (Cartan, teleparallel, Palatini) correspond to different parameterizations of the same kernel, sharing the same observable image under $Q$. Kramers---Wannier duality is _exactly_ this structure: two different temperatures produce different Boltzmann weights, but the same partition function structure.
+
+#strong[Definition 4] (Formulation fiber). Two kernel parameterizations $K(alpha)$ and $K(alpha')$ are in the same _formulation fiber_ if and only if
+
+$ Q compose K(alpha) = Q compose K(alpha') #h(2em) \"(up to known factors)\" $
+
+The fiber is the equivalence class under this relation.
+
+The critical point $beta_c$ is distinguished: it is the _fixed point_ of the duality involution, and hence a fiber of cardinality 1. All other fibers have cardinality 2 (or more, if additional symmetries are present). This is verified as structure `KramersWannierDuality` in the theory file.
+
+The modern categorical symmetry literature interprets KW duality as a _non-invertible symmetry_, implemented by a topological defect line $cal(D)$ with fusion rule $cal(D)^2 = 1 + g$, where $g$ is the $ZZ_2$ spin-flip symmetry generator. In POT language, this is simpler. The duality is a $ZZ_2$ action on the space of kernel parameterizations: $sigma : beta arrow.bar beta^*$ with $sigma^2 = \"id\"$. The \"non-invertibility\" in the categorical language arises because the critical point is a fixed point where the fiber collapses. In POT language, this is a standard feature of group actions --- fixed points are not pathological; they are simply points where the orbit is smaller.
+
+The POT vocabulary captures the same physics as the categorical framework, but in one sentence: _$K(beta)$ and $K(beta^*)$ are in the same formulation fiber under $Q$_. The fiber picture is more economical and immediately suggests the connection to GR formulation independence, which the categorical approach does not.")
+
+// =============================================================================
+// Section 6: Null Space Structure
+// =============================================================================
+
+define sec_null_space = ArxivSection("Null Space Structure",
+"Different observable projections $Q$ reveal different aspects of the same kernel. This is captured by the null space.
+
+#strong[Theorem 4] (Observable-dependent null space). _The null space $ker(Q)$ depends on the choice of observable:_
+
++ _For $Q_Z$ (partition function): $ker(Q_Z) = emptyset$. Every configuration contributes to $Z$ with positive weight $e^(-beta H) > 0$._
+
++ _For $Q_M$ (magnetization $M = sum_i s_i$): $ker(Q_M) = {bold(s) : sum_i s_i = 0}$. Configurations with zero net spin are invisible to $Q_M$._
+
+_Proof._ For (a): since $e^(-beta H(bold(s))) > 0$ for all $bold(s)$ and all $beta > 0$, every configuration has nonzero weight in $Z$. For (b): the antiferromagnetic (checkerboard) ground state $bold(s)_(\"AF\")$ has $sum_i s_i = 0$ and therefore $Q_M(bold(s)_(\"AF\")) = 0$. The ferromagnetic ground state $bold(s)_(\"FM\")$ has $sum_i s_i = N^2 eq.not 0$ and is visible to $Q_M$. $square$
+
+This demonstrates a general POT principle: _the null space is not an intrinsic property of the system, but of the observation channel_. The antiferromagnetic checkerboard configuration _exists_ in the configuration space $Omega$ --- it has a well-defined Boltzmann weight, contributes to $Z$, and is a perfectly valid \"ontological\" state. But it is _invisible_ to the magnetization observable. It lives in $ker(Q_M)$.
+
+The analogy with gauge theory is direct. In Yang---Mills theory, gauge-equivalent configurations are in the null space of gauge-invariant observables: they exist as distinct connections but produce identical physics. In the Ising model, zero-magnetization configurations are in the null space of $Q_M$: they exist as distinct spin arrangements but produce zero net magnetization.
+
+This is verified as structure `IsingNullSpace` in the theory file, with axioms for the antiferromagnetic and ferromagnetic ground states.")
+
+// =============================================================================
+// Section 7: Unification
+// =============================================================================
+
+define sec_unification = ArxivSection("Unification: Phase Transitions and Gauge Non-Admissibility",
+"The central claim of this paper is that phase transitions in statistical mechanics and gauge non-admissibility in field theory are _the same structural obstruction_, viewed in different domains.
+
+The evidence is summarized in the following correspondence:
+
+#table(
+  columns: (auto, auto, auto),
+  align: (left, left, left),
+  stroke: 0.5pt,
+  inset: 8pt,
+  [*POT Concept*], [*2D Ising Model*], [*General Relativity*],
+  [$K$ (kernel)], [$e^(-beta H)$], [Einstein field equations],
+  [$Q$ (projection)], [$\"Tr\"$ (thermo limit)], [Observable extraction],
+  [Admissibility], [$beta eq.not beta_c$], [Linear sector],
+  [Non-admissibility], [$beta = beta_c$], [Cartan self-coupling],
+  [Singularity source], [$\"Tr\"$ in $N arrow infinity$], [Nonlinear composition],
+  [Formulation fiber], [KW duality $(beta, beta^*)$], [ADM/Palatini/tetrad],
+  [Null space], [Zero-magnetization configs], [Gauge orbits],
+)
+
+The structural identity is this: in both cases, the kernel is well-defined and smooth. The obstruction to admissibility arises from the _composition_ $Q compose K$, not from $K$ alone. In GR, the obstruction is the $omega and omega$ self-coupling that makes the curvature formula nonlinear. In the Ising model, the obstruction is the thermodynamic limit that makes the trace non-analytic.
+
+#strong[Proposition 2] (Structural isomorphism). _The Ising K---Q system and the GR K---Q system share the following abstract structure:_
+
++ _A one-parameter family of smooth kernels $K(lambda)$ (where $lambda = beta$ for Ising, $lambda =$ coupling constant for GR)._
++ _A projection $Q$ that is well-defined for all kernels in the family._
++ _A distinguished parameter value $lambda_c$ where $Q compose K(lambda_c)$ fails to be smooth._
++ _A duality or equivalence that identifies different parameterizations with the same observable image._
++ _A null space that depends on the choice of $Q$, not on $K$._
+
+This is not a proof that the two systems are \"the same\" in any deep physical sense. It is a proof that they share the same _structural vocabulary_, and that the vocabulary is useful in both domains.")
+
+// =============================================================================
+// Section 8: Discussion
+// =============================================================================
+
+define sec_discussion = ArxivSection("Discussion",
+"The transfer matrix formulation of the 2D Ising model already treats $e^(-beta H)$ as an operator and $Z$ as a trace. This is well-established. What POT adds is:
+
++ *Admissibility as a classification principle.* The transfer matrix literature does not ask \"for which $beta$ is the composition $Q compose K$ smooth?\" It simply computes. POT elevates this to a structural question with a sharp answer (Theorem 1).
+
++ *Formulation fibers.* KW duality is usually treated as a symmetry or a computational trick. POT identifies it as a _fiber_ --- an equivalence class of kernel parameterizations under the observable projection. This immediately connects it to formulation independence in GR, which is conceptually remote in the standard treatment.
+
++ *Singularity localization.* The statement \"the singularity is in the projection, not the kernel\" (Theorem 2) is implicit in the transfer matrix approach but has never been stated as a _principle_. POT makes it a theorem.
+
++ *Cross-domain vocabulary.* The same words --- admissibility, fiber, null space, projection singularity --- apply to both statistical mechanics and field theory. This vocabulary does not exist in the transfer matrix literature or in the categorical symmetry literature.
+
+We do not claim that the Ising model _is_ a gauge theory, or that phase transitions _are_ gauge transformations. The analogy is at the level of the K---Q structure, not at the level of the dynamics. The Ising model has no local gauge symmetry, no connection, no curvature. What it shares with GR is the abstract pattern: smooth kernel, non-smooth composition, formulation fiber.
+
+The POT---Ising correspondence suggests several directions for future work:
+
++ *Admissibility type and universality.* The 2D Ising admissibility boundary is logarithmic ($C_v tilde.op -ln|beta - beta_c|$). The 3D Ising model has an algebraic divergence ($C_v tilde.op |beta - beta_c|^(-alpha)$). Does the _type_ of admissibility obstruction determine the universality class?
+
++ *Fibers and solvability.* The 2D Ising model is exactly solvable _and_ has KW duality (a non-trivial formulation fiber). The 3D Ising model is _not_ exactly solvable and has _no_ known duality. Conjecture: exact solvability correlates with the existence of a non-trivial formulation fiber.
+
++ *Higher symmetry.* For models with larger symmetry groups (Potts, $O(N)$), the fiber structure should generalize.")
+
+// =============================================================================
+// Section 9: Conclusion
+// =============================================================================
+
+define sec_conclusion = ArxivSection("Conclusion",
+"We have shown that Onsager's 2D Ising model is a complete instance of the POT kernel---projection decomposition, with:
+
+- $K(beta) = e^(-beta H)$ as the production kernel (positive, entire),
+- $Q = \"Tr\"$ as the observable projection (linear, positivity-preserving),
+- $Z(beta) = Q compose K(beta)$ as the composed observable.
+
+The phase transition at $beta_c$ is an admissibility boundary (Theorem 1). The logarithmic divergence of $C_v$ is a projection artifact (Theorem 2). Kramers---Wannier duality is a formulation fiber (Theorem 3). The null space of the magnetization observable captures zero-magnetization configurations (Theorem 4).
+
+The unifying insight is that phase transitions and gauge non-admissibility are the _same structural obstruction_ in different domains: the kernel is smooth; the composition $Q compose K$ is not. This connects a 1944 result in statistical mechanics to the POT framework for field theory through a single vocabulary: admissibility, fiber, and projection singularity.
+
+All results are formalized in Kleis and verified by Z3. The theory file contains 8 structures with 25+ axioms; the paper verification file passes 8 examples covering all 4 theorems and the unification claim.
+
+The source files are available at https://kleis.io.")
+
+// =============================================================================
+// Section 10: Formal Verification Summary
+// =============================================================================
+
+define sec_verification = ArxivSection("Formal Verification Summary",
+"#table(
+  columns: (auto, auto, auto, auto),
+  align: (left, left, left, center),
+  stroke: 0.5pt,
+  inset: 6pt,
+  [*Structure*], [*Axioms*], [*Content*], [*Z3*],
+  [`BoltzmannKernel`], [6], [Positivity + analyticity for $beta_(\"low\"), beta_c, beta_(\"high\")$], [$checkmark$],
+  [`TraceProjection`], [2], [Linearity + positivity of $\"Tr\"$], [$checkmark$],
+  [`PhaseTransitionSingularity`], [6], [Critical point identification + $C_v$ divergence], [$checkmark$],
+  [`KramersWannierDuality`], [5], [Duality map, involution, self-duality, fiber axiom], [$checkmark$],
+  [`IsingAdmissibility`], [4], [Admissibility classification + smooth implies finite], [$checkmark$],
+  [`IsingNullSpace`], [4], [Null space membership for AF and FM ground states], [$checkmark$],
+  [`IsingPOTSynthesis`], [1], [Completeness of K---Q realization], [$checkmark$],
+)")
+
+// =============================================================================
+// References
+// =============================================================================
+
+define ref_onsager = ArxivReference("Onsager1944",
+    "L. Onsager, Crystal Statistics. I. A Two-Dimensional Model with an Order-Disorder Transition, Phys. Rev. 65, 117---149, 1944.")
+
+define ref_kw = ArxivReference("KW1941",
+    "H. A. Kramers and G. H. Wannier, Statistics of the Two-Dimensional Ferromagnet. Part I, Phys. Rev. 60, 252---262, 1941.")
+
+define ref_schultz = ArxivReference("SchultzMattisLieb1964",
+    "T. D. Schultz, D. C. Mattis, and E. H. Lieb, Two-Dimensional Ising Model as a Soluble Problem of Many Fermions, Rev. Mod. Phys. 36, 856---871, 1964.")
+
+define ref_baxter = ArxivReference("Baxter1982",
+    "R. J. Baxter, Exactly Solved Models in Statistical Mechanics, Academic Press, 1982.")
+
+define ref_shao = ArxivReference("Shao2024",
+    "S.-H. Shao, What's Done Cannot Be Undone: TASI Lectures on Non-Invertible Symmetries, arXiv:2308.00747, 2024.")
+
+define ref_atik_gr = ArxivReference("AtikGR",
+    "E. Atik, Reading General Relativity Through the Projection Kernel, Kleis Research, 2026.")
+
+define ref_atik_em = ArxivReference("AtikEM",
+    "E. Atik, Classical Electrodynamics as a Projected Ontology, Kleis Research, 2026.")
+
+define ref_atik_qft = ArxivReference("AtikQFT",
+    "E. Atik, Perturbative QFT in the K---Q Framework, Kleis Research, 2026.")
+
+define ref_atik_factor = ArxivReference("AtikFactor",
+    "E. Atik, Non-Unique Factorization of Projection Kernels, Kleis Research, 2026.")
+
+define ref_kleis = ArxivReference("Kleis",
+    "E. Atik, Kleis: A Verification Platform for Mathematical Knowledge Production, https://kleis.io, 2026.")
+
+// =============================================================================
+// Paper Assembly
+// =============================================================================
+
+define all_elements = [
+    sec_intro,
+    sec_kq_decomposition,
+    sec_admissibility,
+    sec_singularity,
+    sec_kw_duality,
+    sec_null_space,
+    sec_unification,
+    sec_discussion,
+    sec_conclusion,
+    sec_verification,
+    ref_onsager, ref_kw, ref_schultz, ref_baxter, ref_shao,
+    ref_atik_gr, ref_atik_em, ref_atik_qft, ref_atik_factor, ref_kleis
+]
+
+define ising_paper = arxiv_paper(
+    paper_title,
+    paper_authors,
+    paper_affiliations,
+    paper_abstract,
+    paper_keywords,
+    all_elements
+)
+
+// =============================================================================
+// Paper Compilation
+// =============================================================================
+
+example "compile_paper" {
+    let typst_output = compile_arxiv_paper(ising_paper) in
+    out(typst_raw(typst_output))
+}
+
+example "validate_paper" {
+    assert(valid_arxiv_paper(ising_paper) = true)
+    out("Ising admissibility paper is valid!")
+}

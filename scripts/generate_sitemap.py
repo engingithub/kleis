@@ -120,6 +120,10 @@ EXTRA_ENTRIES = [
      "/docs/papers/pot_kernel_factorization_paper.pdf", 1.0),
     ("docs/papers/middle_egyptian_paper.pdf",
      "/docs/papers/middle_egyptian_paper.pdf", 1.0),
+    ("docs/papers/pot_fiber_solvability_paper.pdf",
+     "/docs/papers/pot_fiber_solvability_paper.pdf", 1.0),
+    ("docs/papers/pot_ising_admissibility_paper.pdf",
+     "/docs/papers/pot_ising_admissibility_paper.pdf", 1.0),
 ]
 
 
