@@ -9,7 +9,7 @@ in.
 
 ![Graph Editor overview showing the electronics domain with palette, canvas, and output panel](../images/graph-editor/graph_editor_overview.png)
 
-*The electronics domain showing a series RLC circuit driven by a voltage source with ground. The palette (left) lists Passive, Active, Source, Connector, and Measurement components. The incidence matrix (right) updates live as components are wired.*
+*The electronics domain showing an astable multivibrator circuit with obstacle-aware routing and wire crossing hops. The palette (left) lists Passive, Active, Source, Connector, and Measurement components. The incidence matrix (right) updates live as components are wired.*
 
 ## Quick Start
 
