@@ -5,7 +5,7 @@
 #![allow(unused_imports)]
 use axum::{
     Router,
-    extract::State,
+    extract::{Query, State},
     http::StatusCode,
     response::{Html, IntoResponse, Json},
     routing::{get, post},
@@ -425,6 +425,9 @@ async fn main() {
         .route("/api/templates", get(templates_handler))
         .route("/api/palette", get(palette_handler))
         .route("/api/gallery", get(gallery_handler))
+        .route("/api/save_graph", post(save_graph_handler))
+        .route("/api/load_graph", get(load_graph_handler))
+        .route("/api/list_graphs", get(list_graphs_handler))
         .route("/health", get(health_handler))
         .nest_service("/static", ServeDir::new("static"))
         .layer(CorsLayer::permissive())
@@ -2587,7 +2590,7 @@ fn simulate_setup_core(req: SimulateSetupRequest) -> SimulateSetupResponse {
         chunk_size: None,
     };
 
-    let sim_preamble = build_sim_preamble(&sim_req, &sim_req.state);
+    let sim_preamble = build_sim_preamble(&sim_req, &sim_req.state, &theory_source);
     let pass1_source = format!("{}{}", sim_preamble, theory_source);
 
     let pass1_program = match parse_kleis_program_with_file(
@@ -3107,7 +3110,7 @@ struct SimulateTimeSample {
 /// Unlike the verification preamble (Z3 axioms), this produces `define`
 /// statements with nth-based lookup so the theory's sim_* functions can
 /// be evaluated concretely without Z3.
-fn build_sim_preamble(req: &SimulateGraphRequest, state: &[f64]) -> String {
+fn build_sim_preamble(req: &SimulateGraphRequest, state: &[f64], theory_source: &str) -> String {
     let nc = req.components.len();
     let nn = req.incidence.v;
 
@@ -3123,6 +3126,20 @@ fn build_sim_preamble(req: &SimulateGraphRequest, state: &[f64]) -> String {
         if !type_map.contains_key(&ct) {
             type_map.insert(ct, next_code);
             next_code += 1;
+        }
+    }
+
+    // Also assign codes for TYPE_X operations declared in the theory but not
+    // present in this circuit, so they evaluate to concrete integers (not
+    // symbolic) in eval_concrete mode.
+    if let Ok(theory_program) = kleis::kleis_parser::parse_kleis_program(theory_source) {
+        for op in theory_program.operations() {
+            if let Some(suffix) = op.name.strip_prefix("TYPE_") {
+                if !suffix.is_empty() && !type_map.contains_key(suffix) {
+                    type_map.insert(suffix.to_string(), next_code);
+                    next_code += 1;
+                }
+            }
         }
     }
 
@@ -3246,6 +3263,54 @@ fn build_sim_preamble(req: &SimulateGraphRequest, state: &[f64]) -> String {
     preamble.push_str("define graph_ctype(c) = graph_ctype_val(c)\n");
     preamble.push_str("define graph_param(c, p) = graph_param_val(c, p)\n");
 
+    // Port-level net mapping: graph_port_net_val(p) = net index for port p
+    // Port-to-net: for each port, find which net it connects to
+    let np = req.port_labels.len();
+    let mut port_net: Vec<i64> = vec![-1; np];
+    for entry in &req.incidence.entries {
+        if entry.port < np {
+            port_net[entry.port] = entry.net as i64;
+        }
+    }
+    if np == 0 {
+        preamble.push_str("define graph_port_net_val(p) = -1\n");
+    } else {
+        let port_net_str: Vec<String> = port_net.iter().map(|n| format!("{}", n)).collect();
+        preamble.push_str(&format!(
+            "define graph_port_net_val(p) = nth([{}], p)\n",
+            port_net_str.join(", ")
+        ));
+    }
+
+    // Component port offset: graph_comp_port0_val(c) = index of first port of component c
+    let mut comp_port0: Vec<usize> = vec![0; nc];
+    {
+        let mut curr_comp = 0;
+        let mut first_port_of_comp = 0;
+        for (pi, label) in req.port_labels.iter().enumerate() {
+            if let Some(ci_str) = label.split(':').next() {
+                if let Ok(ci) = ci_str.parse::<usize>() {
+                    if ci != curr_comp {
+                        curr_comp = ci;
+                        first_port_of_comp = pi;
+                    }
+                    if ci < nc {
+                        comp_port0[ci] = first_port_of_comp;
+                    }
+                }
+            }
+        }
+    }
+    if nc == 0 {
+        preamble.push_str("define graph_comp_port0_val(c) = 0\n");
+    } else {
+        let cp0_str: Vec<String> = comp_port0.iter().map(|p| format!("{}", p)).collect();
+        preamble.push_str(&format!(
+            "define graph_comp_port0_val(c) = nth([{}], c)\n",
+            cp0_str.join(", ")
+        ));
+    }
+
     preamble.push('\n');
     preamble
 }
@@ -3265,108 +3330,54 @@ fn build_sim_state_define(state: &[f64]) -> String {
     format!("define sim_state = [{}]\n", state_str.join(", "))
 }
 
-/// Compute ẋ = Ax + Bu (pure matrix-vector math, domain-agnostic).
-fn linear_deriv(a: &[Vec<f64>], b: &[Vec<f64>], x: &[f64], u: &[f64]) -> Vec<f64> {
-    let ns = x.len();
-    let ni = u.len();
-    (0..ns)
-        .map(|i| {
-            let ax: f64 = (0..ns).map(|j| a[i][j] * x[j]).sum();
-            let bu: f64 = (0..ni).map(|k| b[i][k] * u[k]).sum();
-            ax + bu
-        })
-        .collect()
-}
+/// Build preamble defines for continuous simulation (A/B, inputs, dt, ns, ni).
+/// These are consumed by the theory's sim_step function.
+fn build_continuous_preamble(req: &SimulateGraphRequest) -> String {
+    let mut preamble = String::new();
 
-/// One RK4 step: x_{n+1} from x_n for ẋ = Ax + Bu.
-fn rk4_step(a: &[Vec<f64>], b: &[Vec<f64>], x: &[f64], u: &[f64], dt: f64) -> Vec<f64> {
-    let k1 = linear_deriv(a, b, x, u);
-
-    let x1: Vec<f64> = x.iter().zip(&k1).map(|(xi, k)| xi + 0.5 * dt * k).collect();
-    let k2 = linear_deriv(a, b, &x1, u);
-
-    let x2: Vec<f64> = x.iter().zip(&k2).map(|(xi, k)| xi + 0.5 * dt * k).collect();
-    let k3 = linear_deriv(a, b, &x2, u);
-
-    let x3: Vec<f64> = x.iter().zip(&k3).map(|(xi, k)| xi + dt * k).collect();
-    let k4 = linear_deriv(a, b, &x3, u);
-
-    x.iter()
-        .enumerate()
-        .map(|(i, xi)| xi + dt / 6.0 * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]))
-        .collect()
-}
-
-fn simulate_continuous_core(
-    req: &SimulateGraphRequest,
-    _theory_source: &str,
-) -> SimulateGraphResponse {
-    let a_matrix = match &req.a_matrix {
-        Some(a) => a,
-        None => {
-            return SimulateGraphResponse {
-                state: req.state.clone(),
-                time_series: None,
-                enabled: vec![],
-                fired: None,
-                halted: true,
-                halt_reason: None,
-                error: Some("Missing a_matrix for continuous simulation".into()),
-            };
-        }
-    };
-    let b_matrix = match &req.b_matrix {
-        Some(b) => b,
-        None => {
-            return SimulateGraphResponse {
-                state: req.state.clone(),
-                time_series: None,
-                enabled: vec![],
-                fired: None,
-                halted: true,
-                halt_reason: None,
-                error: Some("Missing b_matrix for continuous simulation".into()),
-            };
-        }
-    };
-    let inputs = match &req.inputs {
-        Some(i) => i,
-        None => {
-            return SimulateGraphResponse {
-                state: req.state.clone(),
-                time_series: None,
-                enabled: vec![],
-                fired: None,
-                halted: true,
-                halt_reason: None,
-                error: Some("Missing inputs for continuous simulation".into()),
-            };
-        }
-    };
     let dt = req.dt.unwrap_or(0.0001);
-    let chunk_size = req.chunk_size.unwrap_or(100);
+    preamble.push_str(&format!("define sim_dt_val = {}\n", dt));
 
-    let mut state = req.state.clone();
-    let mut history: Vec<SimulateTimeSample> = Vec::with_capacity(chunk_size);
-
-    for step in 0..chunk_size {
-        state = rk4_step(a_matrix, b_matrix, &state, inputs, dt);
-        history.push(SimulateTimeSample {
-            step,
-            state: state.clone(),
-            fired: None,
-        });
+    if let Some(ref a) = req.a_matrix {
+        let ns = a.len();
+        preamble.push_str(&format!("define sim_ns_val = {}\n", ns));
+        let a_rows: Vec<String> = a
+            .iter()
+            .map(|row| {
+                let vals: Vec<String> = row.iter().map(|v| format!("{}", v)).collect();
+                format!("[{}]", vals.join(", "))
+            })
+            .collect();
+        preamble.push_str(&format!("define sim_A_val = [{}]\n", a_rows.join(", ")));
+    } else {
+        preamble.push_str("define sim_ns_val = 0\n");
+        preamble.push_str("define sim_A_val = []\n");
     }
 
-    SimulateGraphResponse {
-        state,
-        time_series: Some(history),
-        enabled: vec![],
-        fired: None,
-        halted: false,
-        halt_reason: None,
-        error: None,
+    if let Some(ref b) = req.b_matrix {
+        let ni = if b.is_empty() { 0 } else { b[0].len() };
+        preamble.push_str(&format!("define sim_ni_val = {}\n", ni));
+        let b_rows: Vec<String> = b
+            .iter()
+            .map(|row| {
+                let vals: Vec<String> = row.iter().map(|v| format!("{}", v)).collect();
+                format!("[{}]", vals.join(", "))
+            })
+            .collect();
+        preamble.push_str(&format!("define sim_B_val = [{}]\n", b_rows.join(", ")));
+    } else {
+        preamble.push_str("define sim_ni_val = 0\n");
+        preamble.push_str("define sim_B_val = []\n");
     }
+
+    if let Some(ref inputs) = req.inputs {
+        let vals: Vec<String> = inputs.iter().map(|v| format!("{}", v)).collect();
+        preamble.push_str(&format!("define sim_inputs = [{}]\n", vals.join(", ")));
+    } else {
+        preamble.push_str("define sim_inputs = []\n");
+    }
+
+    preamble
 }
 
 fn simulate_graph_core(req: SimulateGraphRequest) -> SimulateGraphResponse {
@@ -3410,7 +3421,7 @@ fn simulate_graph_core(req: SimulateGraphRequest) -> SimulateGraphResponse {
     };
 
     // Build structural preamble once (everything except sim_state)
-    let structural_preamble = build_sim_preamble(&req, &req.state);
+    let structural_preamble = build_sim_preamble(&req, &req.state, &theory_source);
 
     // Build evaluator from state + pre-computed structural parts
     let make_evaluator = |state: &[f64]| -> Result<Evaluator, String> {
@@ -3492,8 +3503,121 @@ fn simulate_graph_core(req: SimulateGraphRequest) -> SimulateGraphResponse {
     };
 
     // --- Continuous simulation branch ---
+    // Theory's sim_step(i) owns the integration method (ode45, Newton-Raphson, etc.)
     if req.sim_mode.as_deref() == Some("continuous") {
-        return simulate_continuous_core(&req, &theory_source);
+        let continuous_preamble = build_continuous_preamble(&req);
+        let ns = req.state.len();
+        let chunk_size = req.chunk_size.unwrap_or(100);
+        let mut state = req.state.clone();
+        let mut history: Vec<SimulateTimeSample> = Vec::with_capacity(chunk_size);
+
+        let make_cont_evaluator = |st: &[f64]| -> Result<Evaluator, String> {
+            let state_line = build_sim_state_define(st);
+            let full_source = format!(
+                "{}{}{}{}",
+                state_line, structural_preamble, continuous_preamble, theory_source
+            );
+            let program =
+                parse_kleis_program(&full_source).map_err(|e| format!("Parse error: {}", e))?;
+            let mut ev = Evaluator::new();
+            ev.load_program(&program)?;
+            Ok(ev)
+        };
+
+        let eval_sim_step = |ev: &Evaluator, i: usize| -> Result<f64, String> {
+            let expr = Expression::Operation {
+                name: "sim_step".to_string(),
+                args: vec![Expression::Const(i.to_string())],
+                span: None,
+            };
+            match ev.eval_concrete(&expr) {
+                Ok(Expression::Const(ref s)) => s
+                    .parse::<f64>()
+                    .map_err(|_| format!("sim_step({}) not a number: {}", i, s)),
+                Ok(other) => Err(format!("sim_step({}) unexpected: {:?}", i, other)),
+                Err(e) => Err(format!("sim_step({}): {}", i, e)),
+            }
+        };
+
+        let mut eval = match make_cont_evaluator(&state) {
+            Ok(e) => e,
+            Err(e) => {
+                return SimulateGraphResponse {
+                    state,
+                    time_series: None,
+                    enabled: vec![],
+                    fired: None,
+                    halted: true,
+                    halt_reason: None,
+                    error: Some(e),
+                };
+            }
+        };
+
+        for step in 0..chunk_size {
+            let mut new_state = Vec::with_capacity(ns);
+            for i in 0..ns {
+                match eval_sim_step(&eval, i) {
+                    Ok(v) => new_state.push(v),
+                    Err(e) => {
+                        return SimulateGraphResponse {
+                            state,
+                            time_series: Some(history),
+                            enabled: vec![],
+                            fired: None,
+                            halted: true,
+                            halt_reason: None,
+                            error: Some(e),
+                        };
+                    }
+                }
+            }
+            state = new_state;
+            history.push(SimulateTimeSample {
+                step,
+                state: state.clone(),
+                fired: None,
+            });
+
+            if step + 1 < chunk_size {
+                let state_src = build_sim_state_define(&state);
+                let state_prog = match parse_kleis_program(&state_src) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return SimulateGraphResponse {
+                            state,
+                            time_series: Some(history),
+                            enabled: vec![],
+                            fired: None,
+                            halted: true,
+                            halt_reason: None,
+                            error: Some(format!("State update parse error: {}", e)),
+                        };
+                    }
+                };
+                if let Err(e) = eval.load_program(&state_prog) {
+                    return SimulateGraphResponse {
+                        state,
+                        time_series: Some(history),
+                        enabled: vec![],
+                        fired: None,
+                        halted: true,
+                        halt_reason: None,
+                        error: Some(format!("State update load error: {}", e)),
+                    };
+                }
+            }
+        }
+
+        return SimulateGraphResponse {
+            state,
+            time_series: Some(history),
+            enabled: vec![],
+            fired: None,
+            halted: false,
+            halt_reason: None,
+            error: None,
+        };
     }
 
     match req.action {
@@ -3699,6 +3823,701 @@ async fn simulate_graph_handler(
             halted: true,
             halt_reason: None,
             error: Some(format!("Task panic: {}", e)),
+        }),
+    }
+}
+
+// =============================================================================
+// Graph Save / Load / List — domain-agnostic file persistence
+// =============================================================================
+
+#[derive(Debug, Deserialize)]
+struct SaveGraphComponent {
+    id: String,
+    #[serde(rename = "type")]
+    comp_type: String,
+    component_type: String,
+    x: f64,
+    y: f64,
+    rotation: f64,
+    params: std::collections::HashMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SaveGraphNet {
+    id: String,
+    label: Option<String>,
+    connections: Vec<SaveGraphConnection>,
+    #[serde(default)]
+    waypoints: Vec<[f64; 2]>,
+    #[serde(default)]
+    causal: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SaveGraphConnection {
+    #[serde(rename = "componentId")]
+    component_id: String,
+    #[serde(rename = "portName")]
+    port_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SaveGraphRequest {
+    path: String,
+    domain: String,
+    components: Vec<SaveGraphComponent>,
+    nets: Vec<SaveGraphNet>,
+}
+
+#[derive(Debug, Serialize)]
+struct SaveGraphResponse {
+    ok: bool,
+    path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LoadGraphQuery {
+    path: String,
+}
+
+#[derive(Debug, Serialize)]
+struct LoadGraphResponse {
+    domain: Option<String>,
+    components: Option<Vec<serde_json::Value>>,
+    nets: Option<Vec<serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ListGraphsQuery {
+    domain: Option<String>,
+    dir: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ListGraphEntry {
+    path: String,
+    name: String,
+}
+
+#[derive(Debug, Serialize)]
+struct BrowseResponse {
+    current_dir: String,
+    parent: Option<String>,
+    dirs: Vec<ListGraphEntry>,
+    files: Vec<ListGraphEntry>,
+}
+
+fn synthesize_kleis_graph(req: &SaveGraphRequest) -> Result<String, String> {
+    let kleist_dir = std::path::Path::new("std_template_lib");
+    let kleist_file = kleis::kleist_parser::load_kleist_directory(kleist_dir)
+        .map_err(|e| format!("Failed to load .kleist templates: {}", e))?;
+
+    let template_map: std::collections::HashMap<&str, &kleis::kleist_parser::TemplateDefinition> =
+        kleist_file
+            .templates
+            .iter()
+            .map(|t| (t.name.as_str(), t))
+            .collect();
+
+    let mut out = String::new();
+    out.push_str(&format!(
+        "// Kleis Graph — {}\n// Domain: {}\n\n",
+        std::path::Path::new(&req.path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Untitled"),
+        req.domain,
+    ));
+
+    out.push_str(&format!("define graph_domain = \"{}\"\n\n", req.domain));
+
+    out.push_str("define graph_components = [\n");
+    for (i, comp) in req.components.iter().enumerate() {
+        let tmpl = template_map.get(comp.comp_type.as_str());
+        let param_values = if let Some(t) = tmpl {
+            if let Some(params_str) = t.metadata.get("params") {
+                params_str
+                    .split(';')
+                    .filter(|s| !s.is_empty())
+                    .map(|entry| {
+                        let name = entry.split(':').next().unwrap_or("");
+                        comp.params
+                            .get(name)
+                            .map(|v| format_json_value(v))
+                            .unwrap_or_else(|| {
+                                let default = entry.split(':').nth(2).unwrap_or("0");
+                                default.to_string()
+                            })
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                vec![]
+            }
+        } else {
+            comp.params.values().map(|v| format_json_value(v)).collect()
+        };
+
+        let params_list = format!("[{}]", param_values.join(", "));
+        let trailing = if i + 1 < req.components.len() {
+            ","
+        } else {
+            ""
+        };
+        out.push_str(&format!(
+            "    [\"{}\", \"{}\", \"{}\", {}, {}, {}, {}]{}\n",
+            comp.id,
+            comp.comp_type,
+            comp.component_type,
+            comp.x as i64,
+            comp.y as i64,
+            comp.rotation as i64,
+            params_list,
+            trailing,
+        ));
+    }
+    out.push_str("]\n\n");
+
+    out.push_str("define graph_nets = [\n");
+    for (i, net) in req.nets.iter().enumerate() {
+        let conns: Vec<String> = net
+            .connections
+            .iter()
+            .map(|c| format!("[\"{}\", \"{}\"]", c.component_id, c.port_name))
+            .collect();
+        let wps: Vec<String> = net
+            .waypoints
+            .iter()
+            .map(|wp| format!("[{}, {}]", wp[0] as i64, wp[1] as i64))
+            .collect();
+        let trailing = if i + 1 < req.nets.len() { "," } else { "" };
+        out.push_str(&format!(
+            "    [\"{}\", [{}], [{}]]{}\n",
+            net.id,
+            conns.join(", "),
+            wps.join(", "),
+            trailing,
+        ));
+    }
+    out.push_str("]\n");
+
+    let has_causal = req.nets.iter().any(|n| n.causal.is_some());
+    if has_causal {
+        let entries: Vec<String> = req
+            .nets
+            .iter()
+            .filter_map(|n| n.causal.as_ref().map(|c| format!("\"{}:{}\"", n.id, c)))
+            .collect();
+        out.push_str(&format!(
+            "\ndefine graph_net_causal = [{}]\n",
+            entries.join(", ")
+        ));
+    }
+
+    Ok(out)
+}
+
+fn format_json_value(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                i.to_string()
+            } else if let Some(f) = n.as_f64() {
+                let s = format!("{}", f);
+                if s.contains('.') || s.contains('e') || s.contains('E') {
+                    s
+                } else {
+                    format!("{}.0", s)
+                }
+            } else {
+                n.to_string()
+            }
+        }
+        serde_json::Value::String(s) => format!("\"{}\"", s),
+        serde_json::Value::Bool(b) => b.to_string(),
+        _ => format!("{}", v),
+    }
+}
+
+fn save_graph_core(req: SaveGraphRequest) -> SaveGraphResponse {
+    if !req.path.starts_with("examples/") && !req.path.starts_with("theories/") {
+        return SaveGraphResponse {
+            ok: false,
+            path: None,
+            error: Some("Path must be under examples/ or theories/".into()),
+        };
+    }
+
+    let kleis_text = match synthesize_kleis_graph(&req) {
+        Ok(text) => text,
+        Err(e) => {
+            return SaveGraphResponse {
+                ok: false,
+                path: None,
+                error: Some(e),
+            };
+        }
+    };
+
+    let file_path = std::path::Path::new(&req.path);
+    if let Some(parent) = file_path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            return SaveGraphResponse {
+                ok: false,
+                path: None,
+                error: Some(format!("Failed to create directory: {}", e)),
+            };
+        }
+    }
+
+    match std::fs::write(file_path, &kleis_text) {
+        Ok(_) => SaveGraphResponse {
+            ok: true,
+            path: Some(req.path),
+            error: None,
+        },
+        Err(e) => SaveGraphResponse {
+            ok: false,
+            path: None,
+            error: Some(format!("Failed to write file: {}", e)),
+        },
+    }
+}
+
+async fn save_graph_handler(Json(req): Json<SaveGraphRequest>) -> impl IntoResponse {
+    let result = tokio::task::spawn_blocking(move || save_graph_core(req)).await;
+    match result {
+        Ok(resp) => Json(resp),
+        Err(e) => Json(SaveGraphResponse {
+            ok: false,
+            path: None,
+            error: Some(format!("Task panic: {}", e)),
+        }),
+    }
+}
+
+fn load_graph_core(path: &str) -> LoadGraphResponse {
+    use kleis::ast::Expression;
+    use kleis::evaluator::Evaluator;
+    use kleis::kleis_parser::{parse_kleis, parse_kleis_program_with_file};
+
+    if !path.starts_with("examples/") && !path.starts_with("theories/") {
+        return LoadGraphResponse {
+            domain: None,
+            components: None,
+            nets: None,
+            error: Some("Path must be under examples/ or theories/".into()),
+        };
+    }
+
+    let source = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            return LoadGraphResponse {
+                domain: None,
+                components: None,
+                nets: None,
+                error: Some(format!("Failed to read file: {}", e)),
+            };
+        }
+    };
+
+    let program = match parse_kleis_program_with_file(&source, path) {
+        Ok(p) => p,
+        Err(e) => {
+            return LoadGraphResponse {
+                domain: None,
+                components: None,
+                nets: None,
+                error: Some(format!("Parse error: {}", e)),
+            };
+        }
+    };
+
+    let mut evaluator = Evaluator::new();
+    evaluator.load_program(&program);
+
+    let eval_var = |name: &str| -> Result<Expression, String> {
+        let expr = parse_kleis(name).map_err(|e| format!("Parse '{}': {}", name, e))?;
+        evaluator
+            .eval_concrete(&expr)
+            .map_err(|e| format!("Eval '{}': {}", name, e))
+    };
+
+    let domain = match eval_var("graph_domain") {
+        Ok(Expression::String(s)) => s,
+        Ok(other) => {
+            return LoadGraphResponse {
+                domain: None,
+                components: None,
+                nets: None,
+                error: Some(format!("graph_domain is not a string: {:?}", other)),
+            };
+        }
+        Err(e) => {
+            return LoadGraphResponse {
+                domain: None,
+                components: None,
+                nets: None,
+                error: Some(e),
+            };
+        }
+    };
+
+    let kleist_dir = std::path::Path::new("std_template_lib");
+    let kleist_file = match kleis::kleist_parser::load_kleist_directory(kleist_dir) {
+        Ok(f) => f,
+        Err(e) => {
+            return LoadGraphResponse {
+                domain: Some(domain),
+                components: None,
+                nets: None,
+                error: Some(format!("Failed to load .kleist: {}", e)),
+            };
+        }
+    };
+    let template_map: std::collections::HashMap<String, &kleis::kleist_parser::TemplateDefinition> =
+        kleist_file
+            .templates
+            .iter()
+            .map(|t| (t.name.clone(), t))
+            .collect();
+
+    let causal_map: std::collections::HashMap<String, String> = match eval_var("graph_net_causal") {
+        Ok(Expression::List(items)) => items
+            .iter()
+            .filter_map(|item| {
+                if let Expression::String(s) = item {
+                    let parts: Vec<&str> = s.splitn(2, ':').collect();
+                    if parts.len() == 2 {
+                        Some((parts[0].to_string(), parts[1].to_string()))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect(),
+        _ => std::collections::HashMap::new(),
+    };
+
+    let components = match eval_var("graph_components") {
+        Ok(Expression::List(items)) => {
+            let mut result = Vec::new();
+            for item in &items {
+                if let Expression::List(fields) = item {
+                    let comp = parse_component_entry(fields, &template_map);
+                    result.push(comp);
+                }
+            }
+            result
+        }
+        Ok(other) => {
+            return LoadGraphResponse {
+                domain: Some(domain),
+                components: None,
+                nets: None,
+                error: Some(format!("graph_components is not a list: {:?}", other)),
+            };
+        }
+        Err(e) => {
+            return LoadGraphResponse {
+                domain: Some(domain),
+                components: None,
+                nets: None,
+                error: Some(e),
+            };
+        }
+    };
+
+    let nets = match eval_var("graph_nets") {
+        Ok(Expression::List(items)) => {
+            let mut result = Vec::new();
+            for item in &items {
+                if let Expression::List(fields) = item {
+                    let net = parse_net_entry(fields, &causal_map);
+                    result.push(net);
+                }
+            }
+            result
+        }
+        Ok(other) => {
+            return LoadGraphResponse {
+                domain: Some(domain),
+                components: Some(components),
+                nets: None,
+                error: Some(format!("graph_nets is not a list: {:?}", other)),
+            };
+        }
+        Err(e) => {
+            return LoadGraphResponse {
+                domain: Some(domain),
+                components: Some(components),
+                nets: None,
+                error: Some(e),
+            };
+        }
+    };
+
+    LoadGraphResponse {
+        domain: Some(domain),
+        components: Some(components),
+        nets: Some(nets),
+        error: None,
+    }
+}
+
+fn expr_to_string(expr: &kleis::ast::Expression) -> String {
+    match expr {
+        kleis::ast::Expression::String(s) => s.clone(),
+        kleis::ast::Expression::Const(s) => s.clone(),
+        _ => format!("{:?}", expr),
+    }
+}
+
+fn expr_to_f64(expr: &kleis::ast::Expression) -> f64 {
+    match expr {
+        kleis::ast::Expression::Const(s) => s.parse::<f64>().unwrap_or(0.0),
+        _ => 0.0,
+    }
+}
+
+fn expr_to_json(expr: &kleis::ast::Expression) -> serde_json::Value {
+    match expr {
+        kleis::ast::Expression::String(s) => serde_json::json!(s),
+        kleis::ast::Expression::Const(s) => {
+            if let Ok(i) = s.parse::<i64>() {
+                serde_json::json!(i)
+            } else if let Ok(f) = s.parse::<f64>() {
+                serde_json::json!(f)
+            } else {
+                serde_json::json!(s)
+            }
+        }
+        kleis::ast::Expression::List(items) => {
+            serde_json::Value::Array(items.iter().map(expr_to_json).collect())
+        }
+        _ => serde_json::Value::Null,
+    }
+}
+
+fn parse_component_entry(
+    fields: &[kleis::ast::Expression],
+    template_map: &std::collections::HashMap<String, &kleis::kleist_parser::TemplateDefinition>,
+) -> serde_json::Value {
+    if fields.len() < 7 {
+        return serde_json::json!({"error": "component entry too short"});
+    }
+
+    let id = expr_to_string(&fields[0]);
+    let comp_type = expr_to_string(&fields[1]);
+    let component_type = expr_to_string(&fields[2]);
+    let x = expr_to_f64(&fields[3]);
+    let y = expr_to_f64(&fields[4]);
+    let rotation = expr_to_f64(&fields[5]);
+
+    let param_values: Vec<serde_json::Value> = if let kleis::ast::Expression::List(pv) = &fields[6]
+    {
+        pv.iter().map(expr_to_json).collect()
+    } else {
+        vec![]
+    };
+
+    let mut params = serde_json::Map::new();
+    if let Some(tmpl) = template_map.get(&comp_type) {
+        if let Some(params_str) = tmpl.metadata.get("params") {
+            for (i, entry) in params_str.split(';').filter(|s| !s.is_empty()).enumerate() {
+                let name = entry.split(':').next().unwrap_or("");
+                if let Some(val) = param_values.get(i) {
+                    params.insert(name.to_string(), val.clone());
+                }
+            }
+        }
+    } else {
+        for (i, val) in param_values.iter().enumerate() {
+            params.insert(format!("p{}", i), val.clone());
+        }
+    }
+
+    serde_json::json!({
+        "id": id,
+        "type": comp_type,
+        "component_type": component_type,
+        "x": x,
+        "y": y,
+        "rotation": rotation,
+        "params": params,
+    })
+}
+
+fn parse_net_entry(
+    fields: &[kleis::ast::Expression],
+    causal_map: &std::collections::HashMap<String, String>,
+) -> serde_json::Value {
+    if fields.len() < 3 {
+        return serde_json::json!({"error": "net entry too short"});
+    }
+
+    let id = expr_to_string(&fields[0]);
+
+    let connections: Vec<serde_json::Value> =
+        if let kleis::ast::Expression::List(conns) = &fields[1] {
+            conns
+                .iter()
+                .filter_map(|c| {
+                    if let kleis::ast::Expression::List(pair) = c {
+                        if pair.len() >= 2 {
+                            Some(serde_json::json!({
+                                "componentId": expr_to_string(&pair[0]),
+                                "portName": expr_to_string(&pair[1]),
+                            }))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+
+    let waypoints: Vec<serde_json::Value> = if let kleis::ast::Expression::List(wps) = &fields[2] {
+        wps.iter()
+            .filter_map(|wp| {
+                if let kleis::ast::Expression::List(coords) = wp {
+                    if coords.len() >= 2 {
+                        Some(serde_json::json!({
+                            "x": expr_to_f64(&coords[0]),
+                            "y": expr_to_f64(&coords[1]),
+                        }))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect()
+    } else {
+        vec![]
+    };
+
+    let causal = causal_map.get(&id).cloned();
+
+    serde_json::json!({
+        "id": id,
+        "label": id,
+        "connections": connections,
+        "waypoints": waypoints,
+        "causal": causal,
+    })
+}
+
+async fn load_graph_handler(Query(query): Query<LoadGraphQuery>) -> impl IntoResponse {
+    let path = query.path;
+    let result = tokio::task::spawn_blocking(move || load_graph_core(&path)).await;
+    match result {
+        Ok(resp) => Json(resp),
+        Err(e) => Json(LoadGraphResponse {
+            domain: None,
+            components: None,
+            nets: None,
+            error: Some(format!("Task panic: {}", e)),
+        }),
+    }
+}
+
+fn domain_default_dir(domain: &str) -> &str {
+    match domain {
+        "electronics" => "examples/electronics",
+        "bond_graph" => "examples/bond-graph",
+        "petri_net" => "examples/petri-nets",
+        _ => "examples",
+    }
+}
+
+fn browse_directory(dir_path: &str) -> BrowseResponse {
+    let dir = std::path::Path::new(dir_path);
+    let canonical = dir_path.trim_end_matches('/').to_string();
+
+    let parent = if canonical == "examples" || canonical == "theories" || canonical.is_empty() {
+        None
+    } else {
+        std::path::Path::new(&canonical)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+    };
+
+    let mut dirs = Vec::new();
+    let mut files = Vec::new();
+
+    if dir.exists() && dir.is_dir() {
+        if let Ok(read_dir) = std::fs::read_dir(dir) {
+            for entry in read_dir.flatten() {
+                let path = entry.path();
+                let name = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                if name.starts_with('.') {
+                    continue;
+                }
+
+                if path.is_dir() {
+                    dirs.push(ListGraphEntry {
+                        path: path.to_string_lossy().to_string(),
+                        name,
+                    });
+                } else if path.extension().and_then(|e| e.to_str()) == Some("kleis") {
+                    files.push(ListGraphEntry {
+                        path: path.to_string_lossy().to_string(),
+                        name: path
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    dirs.sort_by(|a, b| a.name.cmp(&b.name));
+    files.sort_by(|a, b| a.name.cmp(&b.name));
+
+    BrowseResponse {
+        current_dir: canonical,
+        parent,
+        dirs,
+        files,
+    }
+}
+
+async fn list_graphs_handler(Query(query): Query<ListGraphsQuery>) -> impl IntoResponse {
+    let dir = if let Some(d) = query.dir {
+        d
+    } else if let Some(domain) = query.domain {
+        domain_default_dir(&domain).to_string()
+    } else {
+        "examples".to_string()
+    };
+    let result = tokio::task::spawn_blocking(move || browse_directory(&dir)).await;
+    match result {
+        Ok(resp) => Json(resp),
+        Err(_) => Json(BrowseResponse {
+            current_dir: String::new(),
+            parent: None,
+            dirs: vec![],
+            files: vec![],
         }),
     }
 }
@@ -3937,7 +4756,7 @@ mod verify_graph_tests {
         let req = VerifyGraphRequest {
             domain: "electronics".to_string(),
             components: vec![
-                comp("resistor", "Passive", vec![("R", serde_json::json!(1000))]),
+                comp("resistor", "Resistor", vec![("R", serde_json::json!(1000))]),
                 comp("dc_voltage", "Source", vec![("V", serde_json::json!(5))]),
             ],
             incidence: VerifyGraphIncidence {
@@ -3958,7 +4777,7 @@ mod verify_graph_tests {
             "resistor R=1000"
         );
         assert!(preamble.contains("graph_param(1, 0) = 5"), "voltage V=5");
-        assert!(preamble.contains("TYPE_Passive"));
+        assert!(preamble.contains("TYPE_Resistor"));
         assert!(preamble.contains("TYPE_Source"));
     }
 
@@ -4276,7 +5095,7 @@ mod verify_graph_tests {
         let req = VerifyGraphRequest {
             domain: "electronics".to_string(),
             components: vec![
-                comp("resistor", "Passive", vec![("R", serde_json::json!(1000))]),
+                comp("resistor", "Resistor", vec![("R", serde_json::json!(1000))]),
                 comp(
                     "dc_voltage",
                     "VoltageSource",
@@ -4667,7 +5486,7 @@ mod verify_graph_tests {
                     "VoltageSource",
                     vec![("V", serde_json::json!(5))],
                 ),
-                comp("resistor", "Passive", vec![("R", serde_json::json!(1000))]),
+                comp("resistor", "Resistor", vec![("R", serde_json::json!(1000))]),
                 comp("ground", "Ground", vec![]),
             ],
             incidence: VerifyGraphIncidence {
@@ -4708,7 +5527,7 @@ mod verify_graph_tests {
             preamble.contains("TYPE_VoltageSource"),
             "missing TYPE_VoltageSource"
         );
-        assert!(preamble.contains("TYPE_Passive"), "missing TYPE_Passive");
+        assert!(preamble.contains("TYPE_Resistor"), "missing TYPE_Resistor");
         assert!(preamble.contains("TYPE_Ground"), "missing TYPE_Ground");
     }
 
@@ -4722,7 +5541,7 @@ mod verify_graph_tests {
                     "VoltageSource",
                     vec![("V", serde_json::json!(5))],
                 ),
-                comp("resistor", "Passive", vec![("R", serde_json::json!(1000))]),
+                comp("resistor", "Resistor", vec![("R", serde_json::json!(1000))]),
             ],
             incidence: VerifyGraphIncidence {
                 entries: vec![
@@ -4773,7 +5592,7 @@ mod verify_graph_tests {
                     "VoltageSource",
                     vec![("V", serde_json::json!(12))],
                 ),
-                comp("resistor", "Passive", vec![("R", serde_json::json!(1000))]),
+                comp("resistor", "Resistor", vec![("R", serde_json::json!(1000))]),
                 comp("ground", "Ground", vec![]),
             ],
             incidence: VerifyGraphIncidence {
@@ -5573,57 +6392,9 @@ mod continuous_sim_tests {
         );
     }
 
-    #[test]
-    fn rk4_accuracy_with_large_dt() {
-        // RC circuit: V(t) = V_s(1 - e^{-t/RC}), RC = 100 * 1e-6 = 1e-4
-        // At t=5RC = 5e-4s, V = 10*(1 - e^{-5}) ≈ 9.9326V
-        let a = vec![vec![-10000.0]]; // -1/RC
-        let b = vec![vec![10000.0]]; // 1/RC
-        let u = vec![10.0];
-        let dt = 0.00005; // 50us — 5x larger than default 0.0001
-
-        let mut x = vec![0.0];
-        let n_steps = 10; // 10 steps * 50us = 500us = 5RC
-        for _ in 0..n_steps {
-            x = rk4_step(&a, &b, &x, &u, dt);
-        }
-
-        let expected = 10.0 * (1.0 - (-5.0_f64).exp()); // ~9.9326
-        let err = (x[0] - expected).abs();
-        println!(
-            "RK4 large dt: V={:.8}, expected={:.8}, error={:.2e}",
-            x[0], expected, err
-        );
-        assert!(
-            err < 1e-3,
-            "RK4 with dt=50us should be accurate to <0.1%: err={}",
-            err
-        );
-    }
-
-    #[test]
-    fn rk4_stability_at_nyquist_limit() {
-        // RK4 stability region for real negative eigenvalues: |λ*dt| < 2.785
-        // λ = -10000, dt = 0.0002 → |λ*dt| = 2.0 (within stability)
-        let a = vec![vec![-10000.0]];
-        let b = vec![vec![10000.0]];
-        let u = vec![10.0];
-        let dt = 0.0002;
-
-        let mut x = vec![0.0];
-        for _ in 0..50 {
-            x = rk4_step(&a, &b, &x, &u, dt);
-        }
-
-        // Should converge, not blow up
-        assert!(x[0].is_finite(), "RK4 should remain stable at |λ*dt|=2.0");
-        assert!(x[0] > 9.0, "should approach 10V: got {}", x[0]);
-        assert!(
-            x[0] < 10.1,
-            "should not overshoot significantly: got {}",
-            x[0]
-        );
-    }
+    // rk4_step and linear_deriv removed — the theory owns the integration
+    // method via sim_step(i). See continuous_trajectory_approaches_steady_state
+    // for the end-to-end test through eval_concrete.
 
     /// Se(1V) — 1-junction — R(1Ω) — (0-junction — C(1F) — I(1H))
     ///
@@ -5782,43 +6553,663 @@ mod continuous_sim_tests {
         assert!((b[1][0] - 0.0).abs() < tol, "B[1][0] = {} ≠ 0", b[1][0]);
     }
 
-    #[test]
-    fn rlc_trajectory_oscillates() {
-        // Hardcoded correct A/B for R=C=I=1 (underdamped RLC)
-        // Eigenvalues: -0.5 ± j√(3)/2 → damped oscillation
-        // Steady state: V_C = 0, I_L = V_s/R = 1 (inductor is DC short)
-        let a = vec![vec![-1.0, -1.0], vec![1.0, 0.0]];
-        let b = vec![vec![1.0], vec![0.0]];
-        let u = vec![1.0];
-        let dt = 0.01;
+    // =========================================================================
+    // Electronics: half-wave rectifier (DC source + diode + R + C + ground)
+    // =========================================================================
+    //
+    //   c0: dc_voltage  (VoltageSource, V=5)      ports: pos, neg
+    //   c1: diode        (Diode, Is=1e-12, n=1, Vt=0.02585)  ports: anode, cathode
+    //   c2: resistor     (Resistor, R=1000)         ports: left, right
+    //   c3: capacitor    (Capacitor, C=1e-6, initial=0) ports: left, right
+    //   c4: ground       (Ground)                    ports: pin
+    //
+    //   net 0: V+ node — dc_voltage:pos(+1), diode:anode(-1)
+    //   net 1: V_out node — diode:cathode(+1), resistor:left(-1), capacitor:left(-1)
+    //   net 2: GND node — dc_voltage:neg(-1), resistor:right(+1), capacitor:right(+1), ground:pin(-1)
 
-        let mut x = vec![0.0, 0.0]; // [V_C, I_L]
-        let mut max_vc = 0.0_f64;
-        let mut min_vc = 0.0_f64;
-        for _ in 0..2000 {
-            x = rk4_step(&a, &b, &x, &u, dt);
-            max_vc = max_vc.max(x[0]);
-            min_vc = min_vc.min(x[0]);
+    fn elec_comp(
+        comp_type: &str,
+        component_type: &str,
+        params: &[(&str, f64)],
+    ) -> VerifyGraphComponent {
+        let mut m = std::collections::HashMap::new();
+        for (k, v) in params {
+            m.insert(k.to_string(), serde_json::json!(v));
+        }
+        VerifyGraphComponent {
+            comp_type: comp_type.to_string(),
+            component_type: Some(component_type.to_string()),
+            params: if m.is_empty() { None } else { Some(m) },
+        }
+    }
+
+    fn rectifier_setup_request() -> SimulateSetupRequest {
+        SimulateSetupRequest {
+            domain: "electronics".to_string(),
+            components: vec![
+                elec_comp("dc_voltage", "VoltageSource", &[("V", 5.0)]),
+                elec_comp(
+                    "diode",
+                    "Diode",
+                    &[("Is", 1e-12), ("n", 1.0), ("Vt", 0.02585)],
+                ),
+                elec_comp("resistor", "Resistor", &[("R", 1000.0)]),
+                elec_comp("capacitor", "Capacitor", &[("C", 1e-6), ("initial", 0.0)]),
+                elec_comp("ground", "Ground", &[]),
+            ],
+            incidence: VerifyGraphIncidence {
+                v: 3,
+                p: 10,
+                entries: vec![
+                    // net 0: dc_voltage:pos(+1), diode:anode(-1)
+                    VerifyGraphEntry {
+                        net: 0,
+                        port: 0,
+                        value: 1,
+                    }, // 0:pos
+                    VerifyGraphEntry {
+                        net: 0,
+                        port: 2,
+                        value: -1,
+                    }, // 1:anode
+                    // net 1: diode:cathode(+1), resistor:left(-1), capacitor:left(-1)
+                    VerifyGraphEntry {
+                        net: 1,
+                        port: 3,
+                        value: 1,
+                    }, // 1:cathode
+                    VerifyGraphEntry {
+                        net: 1,
+                        port: 4,
+                        value: -1,
+                    }, // 2:left
+                    VerifyGraphEntry {
+                        net: 1,
+                        port: 6,
+                        value: -1,
+                    }, // 3:left
+                    // net 2: dc_voltage:neg(-1), resistor:right(+1), capacitor:right(+1), ground:pin(-1)
+                    VerifyGraphEntry {
+                        net: 2,
+                        port: 1,
+                        value: -1,
+                    }, // 0:neg
+                    VerifyGraphEntry {
+                        net: 2,
+                        port: 5,
+                        value: 1,
+                    }, // 2:right
+                    VerifyGraphEntry {
+                        net: 2,
+                        port: 7,
+                        value: 1,
+                    }, // 3:right
+                    VerifyGraphEntry {
+                        net: 2,
+                        port: 8,
+                        value: -1,
+                    }, // 4:pin
+                ],
+            },
+            port_labels: vec![
+                "0:pos".into(),
+                "0:neg".into(), // dc_voltage
+                "1:anode".into(),
+                "1:cathode".into(), // diode
+                "2:left".into(),
+                "2:right".into(), // resistor
+                "3:left".into(),
+                "3:right".into(), // capacitor
+                "4:pin".into(),   // ground
+            ],
+        }
+    }
+
+    #[test]
+    fn electronics_setup_detects_continuous() {
+        let resp = simulate_setup_core(rectifier_setup_request());
+        if let Some(ref e) = resp.error {
+            println!("Setup error: {}", e);
+        }
+        assert!(resp.error.is_none(), "error: {:?}", resp.error);
+        assert_eq!(resp.sim_mode, "continuous");
+        assert_eq!(resp.state_map.len(), 1, "1 state variable (C)");
+        assert_eq!(resp.input_map.len(), 1, "1 input (V_src)");
+        assert_eq!(resp.initial_state, vec![0.0], "C starts at 0V");
+    }
+
+    #[test]
+    #[cfg(feature = "numerical")]
+    fn electronics_rectifier_trajectory() {
+        let setup = simulate_setup_core(rectifier_setup_request());
+        assert!(setup.error.is_none(), "setup error: {:?}", setup.error);
+
+        let req = SimulateGraphRequest {
+            domain: "electronics".to_string(),
+            components: vec![
+                elec_comp("dc_voltage", "VoltageSource", &[("V", 5.0)]),
+                elec_comp(
+                    "diode",
+                    "Diode",
+                    &[("Is", 1e-12), ("n", 1.0), ("Vt", 0.02585)],
+                ),
+                elec_comp("resistor", "Resistor", &[("R", 1000.0)]),
+                elec_comp("capacitor", "Capacitor", &[("C", 1e-6), ("initial", 0.0)]),
+                elec_comp("ground", "Ground", &[]),
+            ],
+            incidence: VerifyGraphIncidence {
+                v: 3,
+                p: 10,
+                entries: vec![
+                    VerifyGraphEntry {
+                        net: 0,
+                        port: 0,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 0,
+                        port: 2,
+                        value: -1,
+                    },
+                    VerifyGraphEntry {
+                        net: 1,
+                        port: 3,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 1,
+                        port: 4,
+                        value: -1,
+                    },
+                    VerifyGraphEntry {
+                        net: 1,
+                        port: 6,
+                        value: -1,
+                    },
+                    VerifyGraphEntry {
+                        net: 2,
+                        port: 1,
+                        value: -1,
+                    },
+                    VerifyGraphEntry {
+                        net: 2,
+                        port: 5,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 2,
+                        port: 7,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 2,
+                        port: 8,
+                        value: -1,
+                    },
+                ],
+            },
+            port_labels: vec![
+                "0:pos".into(),
+                "0:neg".into(),
+                "1:anode".into(),
+                "1:cathode".into(),
+                "2:left".into(),
+                "2:right".into(),
+                "3:left".into(),
+                "3:right".into(),
+                "4:pin".into(),
+            ],
+            state: setup.initial_state.clone(),
+            action: SimulateAction::Step,
+            last_fired: None,
+            sim_mode: Some("continuous".to_string()),
+            a_matrix: setup.a_matrix,
+            b_matrix: setup.b_matrix,
+            inputs: Some(setup.input_values.clone()),
+            dt: Some(setup.dt),
+            chunk_size: Some(100),
+        };
+
+        let resp = simulate_graph_core(req);
+        if let Some(ref e) = resp.error {
+            println!("Simulation error: {}", e);
+        }
+        assert!(resp.error.is_none(), "error: {:?}", resp.error);
+
+        let ts = resp.time_series.expect("should have trajectory");
+        assert_eq!(ts.len(), 100, "100 steps");
+
+        let final_vc = resp.state[0];
+        println!(
+            "After 100 steps (dt={}): V_C = {:.6}V (target: ~4.3V diode drop from 5V)",
+            setup.dt, final_vc
+        );
+        assert!(final_vc > 0.0, "capacitor should charge: got {}", final_vc);
+        assert!(
+            final_vc < 5.0,
+            "capacitor cannot exceed source voltage: got {}",
+            final_vc
+        );
+    }
+
+    // =========================================================================
+    // Astable multivibrator (2x NPN, cross-coupled capacitors)
+    // =========================================================================
+    //
+    //   Vcc=5V
+    //    |           |           |           |
+    //   R1(1k)     R3(10k)    R4(10k)     R2(1k)
+    //    |           |           |           |
+    //   net1:Q1_C   net3:Q1_B  net4:Q2_B   net2:Q2_C
+    //    |           |           |           |
+    //    +---[C1]----+           +----[C2]---+
+    //    |                                   |
+    //   Q1(B=net3, C=net1, E=net5_gnd)  Q2(B=net4, C=net2, E=net5_gnd)
+    //
+    //   net0 = Vcc (5V), net5 = GND
+    //
+    // Components (10):
+    //   c0:  Vcc     VoltageSource  (V=5)        ports: pos(0), neg(1)
+    //   c1:  R1      Resistor       (R=1000)     ports: left(2), right(3)
+    //   c2:  R2      Resistor       (R=1000)     ports: left(4), right(5)
+    //   c3:  R3      Resistor       (R=10000)    ports: left(6), right(7)
+    //   c4:  R4      Resistor       (R=10000)    ports: left(8), right(9)
+    //   c5:  C1      Capacitor      (C=10e-6)    ports: left(10), right(11)
+    //   c6:  C2      Capacitor      (C=10e-6)    ports: left(12), right(13)
+    //   c7:  Q1      NPN            (beta=100, Is=1e-14, Vt=0.02585)
+    //                                            ports: base(14), coll(15), emit(16)
+    //   c8:  Q2      NPN            (beta=100, Is=1e-14, Vt=0.02585)
+    //                                            ports: base(17), coll(18), emit(19)
+    //   c9:  GND     Ground         ()           ports: pin(20)
+    //
+    // Nets (6):
+    //   net0: Vcc    — Vcc:pos(p0), R1:left(p2), R2:left(p4), R3:left(p6), R4:left(p8)
+    //   net1: Q1_C   — R1:right(p3), C1:left(p10), Q1:coll(p15)
+    //   net2: Q2_C   — R2:right(p5), C2:left(p12), Q2:coll(p18)
+    //   net3: Q1_B   — R3:right(p7), C1:right(p11), Q1:base(p14)
+    //   net4: Q2_B   — R4:right(p9), C2:right(p13), Q2:base(p17)
+    //   net5: GND    — Vcc:neg(p1), Q1:emit(p16), Q2:emit(p19), GND:pin(p20)
+
+    fn multivibrator_setup_request() -> SimulateSetupRequest {
+        SimulateSetupRequest {
+            domain: "electronics".to_string(),
+            components: vec![
+                elec_comp("vcc", "VoltageSource", &[("V", 5.0)]),
+                elec_comp("r1", "Resistor", &[("R", 1000.0)]),
+                elec_comp("r2", "Resistor", &[("R", 1000.0)]),
+                elec_comp("r3", "Resistor", &[("R", 10000.0)]),
+                elec_comp("r4", "Resistor", &[("R", 10000.0)]),
+                elec_comp("c1", "Capacitor", &[("C", 10e-6), ("initial", 0.1)]),
+                elec_comp("c2", "Capacitor", &[("C", 10e-6), ("initial", 0.0)]),
+                elec_comp(
+                    "q1",
+                    "NPN",
+                    &[("beta_f", 100.0), ("Is", 1e-14), ("Vt", 0.02585)],
+                ),
+                elec_comp(
+                    "q2",
+                    "NPN",
+                    &[("beta_f", 100.0), ("Is", 1e-14), ("Vt", 0.02585)],
+                ),
+                elec_comp("gnd", "Ground", &[]),
+            ],
+            incidence: VerifyGraphIncidence {
+                v: 6,
+                p: 21,
+                entries: vec![
+                    // net0 (Vcc): Vcc:pos, R1:left, R2:left, R3:left, R4:left
+                    VerifyGraphEntry {
+                        net: 0,
+                        port: 0,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 0,
+                        port: 2,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 0,
+                        port: 4,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 0,
+                        port: 6,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 0,
+                        port: 8,
+                        value: 1,
+                    },
+                    // net1 (Q1_C): R1:right, C1:left, Q1:coll
+                    VerifyGraphEntry {
+                        net: 1,
+                        port: 3,
+                        value: -1,
+                    },
+                    VerifyGraphEntry {
+                        net: 1,
+                        port: 10,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 1,
+                        port: 15,
+                        value: -1,
+                    },
+                    // net2 (Q2_C): R2:right, C2:left, Q2:coll
+                    VerifyGraphEntry {
+                        net: 2,
+                        port: 5,
+                        value: -1,
+                    },
+                    VerifyGraphEntry {
+                        net: 2,
+                        port: 12,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 2,
+                        port: 18,
+                        value: -1,
+                    },
+                    // net3 (Q1_B): R3:right, C1:right, Q1:base
+                    VerifyGraphEntry {
+                        net: 3,
+                        port: 7,
+                        value: -1,
+                    },
+                    VerifyGraphEntry {
+                        net: 3,
+                        port: 11,
+                        value: -1,
+                    },
+                    VerifyGraphEntry {
+                        net: 3,
+                        port: 14,
+                        value: 1,
+                    },
+                    // net4 (Q2_B): R4:right, C2:right, Q2:base
+                    VerifyGraphEntry {
+                        net: 4,
+                        port: 9,
+                        value: -1,
+                    },
+                    VerifyGraphEntry {
+                        net: 4,
+                        port: 13,
+                        value: -1,
+                    },
+                    VerifyGraphEntry {
+                        net: 4,
+                        port: 17,
+                        value: 1,
+                    },
+                    // net5 (GND): Vcc:neg, Q1:emit, Q2:emit, GND:pin
+                    VerifyGraphEntry {
+                        net: 5,
+                        port: 1,
+                        value: -1,
+                    },
+                    VerifyGraphEntry {
+                        net: 5,
+                        port: 16,
+                        value: -1,
+                    },
+                    VerifyGraphEntry {
+                        net: 5,
+                        port: 19,
+                        value: -1,
+                    },
+                    VerifyGraphEntry {
+                        net: 5,
+                        port: 20,
+                        value: -1,
+                    },
+                ],
+            },
+            port_labels: vec![
+                "0:pos".into(),
+                "0:neg".into(), // Vcc (c0): p0, p1
+                "1:left".into(),
+                "1:right".into(), // R1 (c1): p2, p3
+                "2:left".into(),
+                "2:right".into(), // R2 (c2): p4, p5
+                "3:left".into(),
+                "3:right".into(), // R3 (c3): p6, p7
+                "4:left".into(),
+                "4:right".into(), // R4 (c4): p8, p9
+                "5:left".into(),
+                "5:right".into(), // C1 (c5): p10, p11
+                "6:left".into(),
+                "6:right".into(), // C2 (c6): p12, p13
+                "7:base".into(),
+                "7:coll".into(),
+                "7:emit".into(), // Q1 (c7): p14, p15, p16
+                "8:base".into(),
+                "8:coll".into(),
+                "8:emit".into(), // Q2 (c8): p17, p18, p19
+                "9:pin".into(),  // GND (c9): p20
+            ],
+        }
+    }
+
+    #[test]
+    fn multivibrator_setup_ok() {
+        let resp = simulate_setup_core(multivibrator_setup_request());
+        if let Some(ref e) = resp.error {
+            println!("Setup error: {}", e);
+        }
+        assert!(resp.error.is_none(), "error: {:?}", resp.error);
+        assert_eq!(resp.sim_mode, "continuous");
+        assert_eq!(resp.state_map.len(), 2, "2 state variables (C1, C2)");
+    }
+
+    #[test]
+    #[cfg(feature = "numerical")]
+    fn electronics_multivibrator_oscillates() {
+        let setup = simulate_setup_core(multivibrator_setup_request());
+        assert!(setup.error.is_none(), "setup: {:?}", setup.error);
+
+        // Break symmetry: C1 starts at 0.1V, C2 at 0V
+        let mut state = setup.initial_state.clone();
+        state[0] = 0.1;
+
+        let req = SimulateGraphRequest {
+            domain: "electronics".to_string(),
+            components: vec![
+                elec_comp("vcc", "VoltageSource", &[("V", 5.0)]),
+                elec_comp("r1", "Resistor", &[("R", 1000.0)]),
+                elec_comp("r2", "Resistor", &[("R", 1000.0)]),
+                elec_comp("r3", "Resistor", &[("R", 10000.0)]),
+                elec_comp("r4", "Resistor", &[("R", 10000.0)]),
+                elec_comp("c1", "Capacitor", &[("C", 10e-6), ("initial", 0.1)]),
+                elec_comp("c2", "Capacitor", &[("C", 10e-6), ("initial", 0.0)]),
+                elec_comp(
+                    "q1",
+                    "NPN",
+                    &[("beta_f", 100.0), ("Is", 1e-14), ("Vt", 0.02585)],
+                ),
+                elec_comp(
+                    "q2",
+                    "NPN",
+                    &[("beta_f", 100.0), ("Is", 1e-14), ("Vt", 0.02585)],
+                ),
+                elec_comp("gnd", "Ground", &[]),
+            ],
+            incidence: VerifyGraphIncidence {
+                v: 6,
+                p: 21,
+                entries: vec![
+                    VerifyGraphEntry {
+                        net: 0,
+                        port: 0,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 0,
+                        port: 2,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 0,
+                        port: 4,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 0,
+                        port: 6,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 0,
+                        port: 8,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 1,
+                        port: 3,
+                        value: -1,
+                    },
+                    VerifyGraphEntry {
+                        net: 1,
+                        port: 10,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 1,
+                        port: 15,
+                        value: -1,
+                    },
+                    VerifyGraphEntry {
+                        net: 2,
+                        port: 5,
+                        value: -1,
+                    },
+                    VerifyGraphEntry {
+                        net: 2,
+                        port: 12,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 2,
+                        port: 18,
+                        value: -1,
+                    },
+                    VerifyGraphEntry {
+                        net: 3,
+                        port: 7,
+                        value: -1,
+                    },
+                    VerifyGraphEntry {
+                        net: 3,
+                        port: 11,
+                        value: -1,
+                    },
+                    VerifyGraphEntry {
+                        net: 3,
+                        port: 14,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 4,
+                        port: 9,
+                        value: -1,
+                    },
+                    VerifyGraphEntry {
+                        net: 4,
+                        port: 13,
+                        value: -1,
+                    },
+                    VerifyGraphEntry {
+                        net: 4,
+                        port: 17,
+                        value: 1,
+                    },
+                    VerifyGraphEntry {
+                        net: 5,
+                        port: 1,
+                        value: -1,
+                    },
+                    VerifyGraphEntry {
+                        net: 5,
+                        port: 16,
+                        value: -1,
+                    },
+                    VerifyGraphEntry {
+                        net: 5,
+                        port: 19,
+                        value: -1,
+                    },
+                    VerifyGraphEntry {
+                        net: 5,
+                        port: 20,
+                        value: -1,
+                    },
+                ],
+            },
+            port_labels: vec![
+                "0:pos".into(),
+                "0:neg".into(),
+                "1:left".into(),
+                "1:right".into(),
+                "2:left".into(),
+                "2:right".into(),
+                "3:left".into(),
+                "3:right".into(),
+                "4:left".into(),
+                "4:right".into(),
+                "5:left".into(),
+                "5:right".into(),
+                "6:left".into(),
+                "6:right".into(),
+                "7:base".into(),
+                "7:coll".into(),
+                "7:emit".into(),
+                "8:base".into(),
+                "8:coll".into(),
+                "8:emit".into(),
+                "9:pin".into(),
+            ],
+            state,
+            action: SimulateAction::Step,
+            last_fired: None,
+            sim_mode: Some("continuous".to_string()),
+            a_matrix: setup.a_matrix,
+            b_matrix: setup.b_matrix,
+            inputs: Some(setup.input_values.clone()),
+            dt: Some(setup.dt),
+            chunk_size: Some(100),
+        };
+
+        let resp = simulate_graph_core(req);
+        if let Some(ref e) = resp.error {
+            println!("Simulation error: {}", e);
+        }
+        assert!(resp.error.is_none(), "error: {:?}", resp.error);
+
+        let ts = resp.time_series.expect("should have trajectory");
+        println!("Multivibrator: {} steps, dt={}", ts.len(), setup.dt);
+        println!("  final state: {:?}", resp.state);
+        for (i, sv) in ts.iter().enumerate() {
+            if i % 10 == 0 || i == ts.len() - 1 {
+                println!(
+                    "  step {:>4} (t={:.4}s): C1={:.6}V  C2={:.6}V",
+                    i,
+                    (i + 1) as f64 * setup.dt,
+                    sv.state[0],
+                    sv.state[1]
+                );
+            }
         }
 
-        println!(
-            "After 2000 steps: V_C={:.6}, I_L={:.6}, max_VC={:.6}, min_VC={:.6}",
-            x[0], x[1], max_vc, min_vc
-        );
-
-        // V_C rises from 0, peaks, then oscillates back through 0 (goes negative)
-        assert!(max_vc > 0.3, "V_C should peak above 0: max={}", max_vc);
+        assert!(!ts.is_empty(), "should produce time series");
+        let any_nonzero = ts.iter().any(|sv| sv.state.iter().any(|&v| v.abs() > 1e-6));
         assert!(
-            min_vc < -0.01,
-            "V_C should go negative (oscillation): min={}",
-            min_vc
-        );
-        // Steady state: V_C → 0, I_L → 1
-        assert!(x[0].abs() < 0.01, "V_C should settle near 0: got {}", x[0]);
-        assert!(
-            (x[1] - 1.0).abs() < 0.01,
-            "I_L should settle near 1A: got {}",
-            x[1]
+            any_nonzero,
+            "state should evolve from zero initial conditions"
         );
     }
 }

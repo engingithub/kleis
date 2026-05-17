@@ -343,6 +343,144 @@
             font-size: 12px;
         }
 
+        /* File picker modal */
+        .file-picker-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 200;
+        }
+        .file-picker-overlay.visible { display: flex; align-items: center; justify-content: center; }
+
+        .file-picker {
+            background: #1e1e2e;
+            border-radius: 10px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+            padding: 20px 24px;
+            min-width: 360px;
+            max-width: 480px;
+            max-height: 70vh;
+            color: #e0e0e0;
+            font-size: 13px;
+        }
+
+        .file-picker h3 {
+            margin: 0 0 14px 0;
+            font-size: 15px;
+            color: #fff;
+            font-weight: 600;
+        }
+
+        .file-picker-list {
+            list-style: none;
+            padding: 0;
+            margin: 0 0 16px 0;
+            max-height: 40vh;
+            overflow-y: auto;
+        }
+
+        .file-picker-list li {
+            padding: 10px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            transition: background 0.15s;
+        }
+
+        .file-picker-list li:hover { background: rgba(255,255,255,0.1); }
+
+        .file-picker-list li .fp-name {
+            font-weight: 500;
+            color: #fff;
+        }
+
+        .file-picker-list li .fp-path {
+            font-size: 11px;
+            color: #888;
+            margin-left: auto;
+        }
+
+        .file-picker-list li .fp-icon {
+            font-size: 16px;
+            opacity: 0.6;
+        }
+
+        .file-picker-empty {
+            padding: 20px;
+            text-align: center;
+            color: #888;
+        }
+
+        .file-picker-input-row {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            margin-bottom: 12px;
+        }
+
+        .file-picker-input-row input {
+            flex: 1;
+            padding: 8px 12px;
+            border-radius: 6px;
+            border: 1px solid rgba(255,255,255,0.2);
+            background: rgba(255,255,255,0.08);
+            color: #fff;
+            font-size: 13px;
+            font-family: monospace;
+            outline: none;
+        }
+
+        .file-picker-input-row input:focus {
+            border-color: rgba(100,150,255,0.5);
+        }
+
+        .file-picker-input-row .fp-ext {
+            color: #888;
+            font-size: 13px;
+            font-family: monospace;
+        }
+
+        .file-picker-list li.fp-active {
+            background: rgba(100,150,255,0.2);
+            border: 1px solid rgba(100,150,255,0.3);
+        }
+
+        .file-picker-list li { border: 1px solid transparent; }
+
+        .file-picker-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+
+        .file-picker-actions button {
+            padding: 7px 18px;
+            border-radius: 6px;
+            border: 1px solid rgba(255,255,255,0.2);
+            background: transparent;
+            color: #ccc;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .file-picker-actions button:hover {
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+        }
+
+        .file-picker-actions button.fp-primary {
+            background: #2563eb;
+            border-color: #2563eb;
+            color: #fff;
+        }
+
+        .file-picker-actions button.fp-primary:hover {
+            background: #1d4ed8;
+        }
+
         /* Simulation panel controls */
         .sim-controls { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
         .sim-controls button {
@@ -445,6 +583,10 @@
             <button id="btnSimulate" title="Simulate dynamics">Simulate</button>
             <div class="toolbar-sep"></div>
             <button id="btnExportTypst" title="Copy Typst to clipboard">Copy Typst</button>
+            <div class="toolbar-sep"></div>
+            <button id="btnSave" title="Save graph (Ctrl+S)">Save</button>
+            <button id="btnSaveAs" title="Save graph as...">Save As</button>
+            <button id="btnLoad" title="Load graph...">Load</button>
         </div>
         <div class="status-bar" id="statusBar">Mode: Place — click palette, then click canvas</div>
     </header>
@@ -461,6 +603,20 @@
         <div class="canvas-container" id="canvasContainer">
             <div class="verify-results" id="verifyResults"></div>
             <div class="verify-results" id="simulatePanel"></div>
+            <div class="file-picker-overlay" id="filePickerOverlay">
+                <div class="file-picker">
+                    <h3 id="filePickerTitle">Load Graph</h3>
+                    <div class="file-picker-input-row" id="filePickerInputRow" style="display:none">
+                        <input type="text" id="filePickerInput" placeholder="filename" spellcheck="false" />
+                        <span class="fp-ext">.kleis</span>
+                    </div>
+                    <ul class="file-picker-list" id="filePickerList"></ul>
+                    <div class="file-picker-actions">
+                        <button id="filePickerCancel">Cancel</button>
+                        <button id="filePickerConfirm" style="display:none">Save</button>
+                    </div>
+                </div>
+            </div>
             <svg id="graphCanvas" xmlns="http://www.w3.org/2000/svg">
                 <defs>
                     <pattern id="gridPattern" width="20" height="20" patternUnits="userSpaceOnUse">

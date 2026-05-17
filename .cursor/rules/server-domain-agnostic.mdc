@@ -1,0 +1,35 @@
+# server.rs is domain-agnostic — NON-NEGOTIABLE
+
+`server.rs` contains **ZERO domain-specific code**. It must never learn what
+domain it is simulating. The only sim modes are `"discrete"` and `"continuous"`.
+
+## What the server knows
+
+- Graph topology: incidence matrix, component types, parameters
+- Two simulation modes: discrete (Petri nets) and continuous (everything else)
+- How to call `eval_concrete` on theory-defined functions
+- How to run Z3 probes defined by the theory
+
+## What the server does NOT know
+
+- Whether a circuit is linear or nonlinear
+- Whether simulation uses Euler, RK4, Newton-Raphson, or anything else
+- What constitutive equations components have
+- What physical domain the graph represents
+
+## The theory owns the physics
+
+The companion `.kleis` theory file defines ALL domain semantics:
+- `sim_step(i)` — computes new state (Euler for bond graphs, Newton-Raphson for electronics)
+- `sim_state_count`, `sim_state_map(i)` — dimensions and mappings
+- Z3 probe protocol — theory generates probe source strings, server runs them blindly
+- Verification axioms — domain rules expressed over generic graph primitives
+
+## Rules
+
+1. **NEVER add a new `sim_mode`** for a specific domain. Electronics is `"continuous"`,
+   same as bond graphs. The difference is inside the theory's `sim_step`.
+2. **NEVER add `if domain == "electronics"` branches** or equivalent in server.rs.
+3. **NEVER bypass the theory** by implementing simulation logic in Rust.
+4. If you find yourself writing domain-specific code in server.rs, STOP.
+   Move that logic into the companion `.kleis` theory file instead.

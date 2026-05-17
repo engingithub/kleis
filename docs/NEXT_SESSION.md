@@ -1,6 +1,6 @@
 # Next Session Notes
 
-**Last Updated:** May 14, 2026
+**Last Updated:** May 16, 2026
 
 ---
 
@@ -1051,11 +1051,37 @@ data model (EditorNode AST), domain data (`.kleist`/`.kleis`), and server APIs.
   existing connectors does not work reliably. Hit testing on segments and waypoint
   handles needs debugging. Coordinate transforms and snap-to-grid interaction may
   be the root cause.
-- **Only Manhattan routing implemented** — orthogonal (right-angle) routing is the
-  only connector type. Missing: straight lines (graph theory), curved/spline
-  (bond graphs), auto-routing around obstacles. Manhattan routing itself needs
-  improvement: obstacle avoidance, clean re-routing when components are dragged,
-  minimum segment lengths to prevent zero-length collapse.
+- ~~**Obstacle avoidance in Manhattan routing**~~ — DONE (grid-based Dijkstra).
+  Algorithm inspired by jose-mdz's Orthogonal Connector (20 forks, used by
+  UMLBoard and BlockSuite):
+  1. Inflate all component AABBs by `SHAPE_MARGIN = 10px` — **no exclusions**,
+     including connected components (since `WIRE_STUB = 30 > SHAPE_MARGIN = 10`,
+     stubs always extend beyond the obstacle boundary).
+  2. Collect "rulers" from inflated edges + endpoint coordinates.
+  3. Generate candidate spots at ruler intersections, filtering out any inside
+     an obstacle AABB.
+  4. Build adjacency graph connecting orthogonal neighbors with clear line-of-sight
+     (`segmentClearOfObstacles`).
+  5. Dijkstra shortest path with bend penalty (direction changes cost 1.5×
+     edge weight) to minimise unnecessary turns.
+  6. Simplify collinear intermediate points.
+  Applied to 2-port nets (`computeDefaultWaypoints`), multi-port trunk-branch
+  legs (`computeTrunkBranch`), and star-topology legs (`getMultiNetLegs`).
+  Functions: `routeOrthogonal`, `segmentClearOfObstacles`, `buildObstacleList`,
+  `getComponentAABB`, `pointInsideAnyObstacle`, `simplifyOrthogonalPath`.
+
+  **Routing improvement roadmap (future approaches):**
+  1. **Steiner tree for multi-port nets** — compute minimum spanning tree of all
+     ports, route each edge with Dijkstra. Better multi-port topology than
+     current trunk-branch (which picks the farthest pair as trunk).
+  2. **Visibility graph** — expand each AABB by margin, use corners as graph nodes,
+     find shortest orthogonal path. Exact optimal without ruler grid.
+  3. **Channel router** — EDA-grade approach, define routing channels between
+     components, assign wire tracks. Only warranted if Kleis grows into IC design
+     with thousands of components.
+
+- **Only Manhattan routing mode for electronics** — orthogonal (right-angle) routing
+  is the only connector type. Missing: curved/spline connectors (future).
 - **Electronics connector behavior is hard to understand** — the interaction model
   for wiring electronic components is confusing. Needs a UX review: what happens
   on click, drag, release at each stage of connection creation. Consider visual
@@ -1178,6 +1204,280 @@ removed from `scripts/build-kleis.sh`. The crate source is kept in
 1. **Oscilloscope** — ODE solver at animation frame rate (real need for Rust speed)
 2. **3D Plotting** — grid evaluation for surface rendering
 3. **Large graph analysis** — hundreds of components, real-time constraint checking
+
+---
+
+### Electronics MNA Theory — NONLINEAR CIRCUIT SIMULATION
+
+**Status:** Phase 1 COMPLETE. Newton-Raphson MNA simulation working end-to-end.
+**Theory file (reference):** `theories/electronics_mna_nonlinear.kleis`
+**Test file (verified):** `theories/test_electronics_jacobian.kleis` (15 examples pass)
+**Implementation:** `std_template_lib/electronics.kleis` (MNA + NR sim_step)
+**End-to-end test:** `electronics_rectifier_trajectory` (requires `--features numerical`)
+
+#### What we proved (session May 14, 2026)
+
+1. **Symbolic Jacobian works.** `diff()` from `stdlib/symbolic_diff.kleis` computes
+   exact Jacobian entries for diode (Shockley), BJT (Ebers-Moll), and MOSFET (Level 1).
+   Same engine that derives Schwarzschild curvature now derives Newton-Raphson stamps.
+
+2. **No bridge function needed.** Native Kleis arithmetic (`exp`, `sin`, `ln`, `solve`,
+   `matrix`, `ode45`, `fft`) handles all numeric computation. The Expression AST +
+   `diff()` is for *deriving and verifying* formulas. Simulation runs natively, same as
+   the phi4 paper computes Feynman parameter integrals.
+
+3. **All builtins exist.** `solve`/`linsolve` (LAPACK) for J·Δx = -F, `matrix` for
+   assembly, `eigenvalues` for stability, `fft`/`dft` for frequency analysis. No Rust
+   changes needed.
+
+4. **Constitutive equations verified at concrete operating points:**
+
+   | Component | Jacobian entry | Value at operating point |
+   |-----------|---------------|-------------------------|
+   | Diode g_d (0.7V forward) | `(Is/nVt)·exp(Vd/nVt)` | 0.287 S |
+   | Diode g_d (-1V reverse) | same formula | 1.43×10⁻¹⁷ S |
+   | BJT g_m (0.65V active) | `(Is/Vt)·exp(Vbe/Vt)` | symbolic exp(25.15) |
+   | MOSFET g_m (3V sat) | `Kp·(Vgs-Vth)` | exactly 0.002 S |
+
+#### The gap: matching bond_graph.kleis infrastructure
+
+`bond_graph.kleis` is 509 lines of working infrastructure that the server calls through
+a well-defined contract. The electronics theory needs the same depth:
+
+**Phase 1: eval_concrete setup interface — DONE**
+- `sim_state_count`, `sim_state_map(i)`, `sim_input_map(k)`, `sim_connected_net(c)`
+- `sim_initial_state(i)`, `sim_input_value(k)` — same recursive walker pattern
+- Z3 probe stubs: `sim_topology_source = ""`, `sim_probe_count = 0` — NR doesn't
+  need linearized A/B extraction
+
+**Phase 2: Constitutive equations — DONE**
+- `diode_current(Vd, Is, nd, Vt)` and `diode_conductance(Vd, Is, nd, Vt)`
+- Voltage limiting via `diode_vcrit(nd, Vt) = 10*nd*Vt` — linearize above critical
+  voltage to prevent exp() overflow during Newton-Raphson
+
+**Phase 3: MNA Jacobian assembly — DONE**
+- `stamp_2port_J(np, nm_, g, n, m)` — generic symmetric ±g pattern for 2-port
+- Per-type wrappers: `stamp_J_resistor`, `stamp_J_capacitor`, `stamp_J_diode`,
+  `stamp_J_vsource`, `stamp_J_ground`
+- `stamp_F_*` functions for residual vector
+- Port-order-based terminal identification: `term_pos(c)`, `term_neg(c)` via
+  `graph_port_net_val(graph_comp_port0_val(c))` — correct for directed components
+- `stamp_J_component`/`stamp_F_component` dispatch by fine-grained component type
+- `mna_build_J(v)` and `mna_build_F(v)` assembled via `list_fold` over components
+
+**Phase 4: Newton-Raphson sim_step — DONE**
+- `nr_iterate(v, iter)` — recursive NR with `solve(J, -F)`, convergence check
+  via `vec_max_abs(dv) < nr_tol` (tol = 1e-9, max 50 iterations)
+- `sim_step(i) = extract_state(i, nr_iterate(nr_initial_guess, 0))`
+- `sim_halted() = false`
+
+**Phase 5: Z3 verification — EXISTING (structural only)**
+- Ground exists, source exists, load exists, no parallel V sources, no series I
+  sources — all working with fine-grained type predicates
+- Future: KCL conservation, passivity, operating region verification
+
+**Phase 6: Server integration — DONE (zero domain-specific code)**
+- `server.rs` stays domain-agnostic. Electronics uses `sim_mode: "continuous"`.
+- `build_sim_preamble` now scans theory source for `operation TYPE_X : ℤ`
+  declarations and assigns sentinel codes for types not in the circuit.
+- `graph_port_net_val(p)` and `graph_comp_port0_val(c)` added to preamble
+  (domain-agnostic port-level connectivity).
+
+**Phase 7: Adaptive timestep — DEFERRED**
+- Needs Z3 probe protocol for linearized eigenvalue extraction
+- Newton convergence monitoring for adaptive dt can be added later
+
+**Fine-grained component types in electronics.kleist — DONE**
+- Resistor, Capacitor, Inductor, Diode, LED, ZenerDiode, NPN, PNP, NMOS, PMOS,
+  OpAmp, VoltageSource, ACVoltageSource, CurrentSource, Ground, Connector, Measurement
+- Each with specific `params:` (e.g., diode: `Is:real:1e-12;n:real:1;Vt:real:0.02585`)
+- electronics.kleis defines fine-grained `TYPE_X` operations and `is_X` predicates
+- Coarse predicates (`is_passive`, `is_active`, `is_source`) as disjunctions
+
+#### Key architectural decisions
+
+1. **MNA, not bond graph formulation.** Electronics uses node voltages (MNA), not
+   effort/flow (bond graph). The two formulations are mathematically equivalent but
+   MNA is standard for electronics and handles nonlinear elements more naturally.
+
+2. **Newton-Raphson in Kleis, not Rust.** The simulation loop is a Kleis function
+   using `solve()`, `matrix()`, and native arithmetic. Same as phi4 uses `ode45()`.
+   The server calls `eval_concrete` on theory-defined functions. Zero domain-specific
+   Rust code. The server knows only "discrete" and "continuous" — it NEVER learns
+   what domain it is simulating.
+
+3. **Symbolic diff() for derivation and verification only.** The Jacobian formulas
+   are derived symbolically (proof of correctness) then implemented as native Kleis
+   functions (performance). `diff(diode_I_expr, "Vd")` proves the formula;
+   `diode_gd(Vd) = (Is/nVt) * exp(Vd/nVt)` computes it.
+
+4. **Companion models for C and L.** Backward Euler discretization turns reactive
+   elements into resistor + current source at each timestep. The MNA matrix is
+   purely algebraic — no ODE solver needed inside the Newton loop.
+
+5. **Topology invariance.** The Jacobian sparsity pattern comes from the incidence
+   matrix (topology). Only the stamp VALUES change with operating point. Replacing
+   a resistor with a diode between the same nodes: same sparsity, different values.
+
+#### Test circuit for development
+
+Half-wave rectifier with LC filter (from test_electronics_jacobian.kleis):
+```
+        R_s (10Ω)    L (1mH)       D1 (1N4148)
+ Vs ─────┤├───── n1 ──∿∿∿── n2 ──|►── n3 ──┬── C (100μF) ── GND
+ (12Vpk 60Hz)                                │
+                                         R_L (1kΩ)
+                                              │
+                                             GND
+```
+5 MNA unknowns (V1, V2, V3, V4, I_Vs), 1 nonlinear element, 2 state variables.
+Small enough to debug, complex enough to exercise the full Newton-Raphson path.
+
+**Phase 8: BJT support + multivibrator test — DONE**
+- 3-terminal net helpers: `term_base(c)`, `term_coll(c)`, `term_emit(c)` via port-order
+  (base=port0, collector=port1, emitter=port2 per electronics.kleist)
+- Simplified Ebers-Moll BJT model: `bjt_ib`, `bjt_gbe`, `bjt_ic`, `bjt_gm`
+  Reuses diode voltage limiting (ideality n=1) to prevent exp() overflow
+- NPN Jacobian stamp (`stamp_J_npn`): 3x3 sub-pattern at (base, coll, emit) nodes
+  - base row: +gbe, -gbe
+  - coll row: +gm, -gm
+  - emit row: -(gbe+gm), +(gbe+gm)
+- NPN residual stamp (`stamp_F_npn`): ib at base, ic at collector, -(ib+ic) at emitter
+- Wired into `stamp_J_component`/`stamp_F_component` dispatch
+- **Tests:**
+  - `multivibrator_setup_ok` — 10-component, 6-net circuit sets up correctly
+    (2 state variables for C1, C2)
+  - `electronics_multivibrator_oscillates` — end-to-end simulation runs
+    (requires `--features numerical`)
+
+**Multivibrator test findings:**
+- Circuit: 2x NPN cross-coupled via capacitors (R1=R2=1k, R3=R4=10k,
+  C1=C2=10uF, Vcc=5V)
+- Symmetry breaking: C1 initial=0.1V, C2 initial=0V — required to escape
+  the unstable symmetric equilibrium
+- After 100 steps (dt=0.1ms, total t=10ms): C1=0.92V, C2=0.85V
+- Both capacitors charging monotonically through base resistors — physically
+  correct initial transient (RC time constant = 10k*10uF = 0.1s)
+- First switching event expected around t ≈ 0.07s (700 steps) when a base
+  voltage exceeds ~0.6V threshold
+
+**Phase 9: Sparse stamp optimization — DONE**
+
+Replaced dense O(n²×nc) Jacobian/residual assembly with sparse entry-list
+approach. Two domain-agnostic evaluator builtins added:
+
+- `assemble_matrix(n, entries)` — builds n×n matrix from `[row, col, value]`
+  triples with scatter-add accumulation. Pure Rust, no interpreter overhead.
+- `assemble_vector(n, entries)` — builds length-n vector from `[index, value]`
+  pairs with scatter-add.
+
+Each stamp function now emits a short list of non-zero entries (e.g., a
+resistor emits 4 J-entries, a BJT emits 6) instead of being called n×n times
+and returning 0 for most positions. The `list_fold` over components produces
+the full entry list, then the Rust builtin assembles the matrix natively.
+
+**Performance results:**
+
+| Test                     | Before (dense) | After (sparse) | Speedup |
+|--------------------------|---------------|----------------|---------|
+| Rectifier (100 steps)    | 5.7s          | 1.24s          | 4.6x    |
+| Multivibrator (100 steps)| 128s          | 12.0s          | 10.7x   |
+
+The speedup is larger for the multivibrator because it has more components
+(10 vs 5), widening the O(n²×nc) vs O(nnz) gap. Numerical results are
+identical — same voltages, same convergence behavior.
+
+**Why the J_linear/J_nonlinear split didn't help:** The earlier attempt to
+decompose J into constant and voltage-dependent parts showed no improvement
+(actually slightly slower) because: (1) the interpreter overhead of the
+nested `map × map × list_fold` loop dominated, not which stamps were called;
+(2) `is_vdep_jacobian` predicate checks (7 `∨` operations × 360 calls) cost
+more than the stamps they skipped; (3) `eval_concrete` re-evaluates
+zero-param defines every time (no caching), so a top-level J_linear wasn't
+truly computed once.
+
+**Why sparse works:** It eliminates the nested loops entirely. Instead of
+nn×nn×nc = 360 interpreter calls (most returning 0), we make nc = 10 calls
+each producing 4-6 entries, then Rust does 41 f64 additions. The interpreter
+overhead reduction is proportional to (nn²/avg_entries_per_component).
+
+**Scaling path for IC-scale circuits (thousands of components):**
+
+The entry-list `[row, col, value]` format is the universal sparse contract.
+The Kleis theory produces it identically regardless of circuit size. Only the
+solver backend needs to change:
+
+| Scale             | Assembly                     | Solver                           |
+|-------------------|-----------------------------|---------------------------------|
+| Small (< 50 nodes)| `assemble_matrix` (dense)   | LAPACK `dgesv` (current)        |
+| Medium (50-5000)  | CSC build from entries       | KLU sparse direct               |
+| Large (5000+)     | CSC build from entries       | Iterative (GMRES + precond.)    |
+
+A future `sparse_solve(n, entries, rhs)` builtin would take the same entry
+list, build a CSC representation, and call KLU — zero changes to
+`electronics.kleis`. The Rust ecosystem has `sparse21` and SuiteSparse
+bindings. Circuit Jacobians are inherently sparse because components connect
+only a few nodes each (unlike neural network weight matrices which are dense).
+
+**Phase 10: Graph Save/Load — DONE**
+
+Implemented domain-agnostic Save/Save As/Load for the Graph Editor. Graphs
+are persisted as `.kleis` files using `define` statements — the Kleis parser
+itself is the file format parser.
+
+**Server endpoints** (in `server.rs`, domain-agnostic):
+- `POST /api/save_graph` — synthesizes `.kleis` text from `graphState` JSON,
+  using `.kleist` template metadata for param ordering
+- `GET /api/load_graph?path=...` — parses `.kleis` via `parse_kleis_program`,
+  loads into `Evaluator`, extracts `graph_domain`, `graph_components`,
+  `graph_nets` via `eval_concrete`, maps positional params back to named
+  params using `.kleist` lookup
+- `GET /api/list_graphs?domain=...` — lists `.kleis` files in
+  `examples/{domain}/graph-editor/`
+
+**Client-side** (`graphEditorMain.js`):
+- Save (Ctrl+S), Save As, Load buttons in toolbar
+- `loadGraphState(data)` rebuilds `graphState`, auto-routes wires, fits view
+- File picker via `prompt()` (lists available files from server)
+
+**Save format** (valid Kleis program):
+```kleis
+define graph_domain = "electronics"
+define graph_components = [
+    ["c0", "dc_voltage", "VoltageSource", 100, 150, 0, [5.0]],
+    ...
+]
+define graph_nets = [
+    ["n0", [["c0", "pos"], ["c1", "anode"]], []],
+    ...
+]
+```
+
+**Seed files** for manual testing:
+- `examples/petri-nets/graph-editor/linear.kleis` (5 components, 4 nets)
+- `examples/electronics/graph-editor/rectifier.kleis` (5 components, 3 nets)
+- `examples/electronics/graph-editor/multivibrator.kleis` (10 components, 6 nets)
+- `examples/bond-graph/graph-editor/rc_circuit.kleis` (4 components, 3 nets)
+
+**Gap analysis**: Verified all three domains (electronics, bond graphs, Petri
+nets) against existing `server.rs` test circuits. No blocking gaps. Derived
+state (incidence matrix, A/B matrices, dt) is recomputed on load via
+`/api/simulate_setup`. Causal strokes (bond graphs) stored via
+`graph_net_causal`. Integer params (Petri nets) preserved naturally.
+
+**Next steps for multivibrator:**
+1. Extend simulation to first switching event (~700 steps, now feasible at
+   0.12s/step ≈ 84s total) — verify cross-coupling voltage swing
+2. Implement LCG pseudo-random noise generator in Kleis for automatic
+   bifurcation perturbation (circuit-agnostic startup)
+3. FFT-based harmonic analysis of the oscillation waveform
+
+#### Stretch goal: synthesizer circuit
+
+A Moog-style analog voice (~30-50 nodes, 20-40 nonlinear BJTs, 10+ op-amps).
+Requires: op-amp macromodel, operating region switching, frequency analysis via
+FFT. All builtins exist. The architecture scales — SPICE uses the same algorithm
+for millions of transistors.
 
 ---
 

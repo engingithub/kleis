@@ -1,0 +1,569 @@
+<!DOCTYPE HTML>
+<html lang="en" class="navy sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <link rel="canonical" href="https://kleis.io/docs/manual/book/chapters/32-graph-editor">
+        <title>Graph Editor - The Kleis Manual</title>
+
+
+        <!-- Custom HTML head -->
+        <!-- Google tag (gtag.js) -->
+        <script async src="https://www.googletagmanager.com/gtag/js?id=G-4MJCXLSP8V"></script>
+        <script>
+          window.dataLayer = window.dataLayer || [];
+          function gtag(){dataLayer.push(arguments);}
+          gtag('js', new Date());
+          gtag('config', 'G-4MJCXLSP8V');
+        </script>
+        
+
+        <meta name="description" content="Graph Editor — Learn graph editor in Kleis: formal verification with Z3, Hindley-Milner type inference, and universal mathematical specification.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-71ffb63a.svg">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-2459343d.css">
+        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "navy";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-5d5b8dda.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-902ee45b.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('navy')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">The Kleis Manual</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/eatikrh/kleis" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/eatikrh/kleis/edit/main/docs/manual/src/chapters/32-graph-editor.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <span class=fa-svg id="git-edit-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M421.7 220.3l-11.3 11.3-22.6 22.6-205 205c-6.6 6.6-14.8 11.5-23.8 14.1L30.8 511c-8.4 2.5-17.5 .2-23.7-6.1S-1.5 489.7 1 481.2L38.7 353.1c2.6-9 7.5-17.2 14.1-23.8l205-205 22.6-22.6 11.3-11.3 33.9 33.9 62.1 62.1 33.9 33.9zM96 353.9l-9.3 9.3c-.9 .9-1.6 2.1-2 3.4l-25.3 86 86-25.3c1.3-.4 2.5-1.1 3.4-2l9.3-9.3H112c-8.8 0-16-7.2-16-16V353.9zM453.3 19.3l39.4 39.4c25 25 25 65.5 0 90.5l-14.5 14.5-22.6 22.6-11.3 11.3-33.9-33.9-62.1-62.1L314.3 67.7l11.3-11.3 22.6-22.6 14.5-14.5c25-25 65.5-25 90.5 0z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="graph-editor"><a class="header" href="#graph-editor">Graph Editor</a></h1>
+<p>The Kleis Graph Editor is a visual, browser-based tool for building
+domain-specific graph schematics. You place typed components from a palette,
+wire their ports together, and the editor maintains a signed incidence matrix,
+an AST, and a Typst rendering of the schematic — all updated live. Structural
+verification (with optional Z3 backing) and time-domain simulation are built
+in.</p>
+<p><img src="../images/graph-editor/graph_editor_overview.png" alt="Graph Editor overview showing the electronics domain with palette, canvas, and output panel"></p>
+<p><em>The electronics domain showing a series RLC circuit driven by a voltage source with ground. The palette (left) lists Passive, Active, Source, Connector, and Measurement components. The incidence matrix (right) updates live as components are wired.</em></p>
+<h2 id="quick-start"><a class="header" href="#quick-start">Quick Start</a></h2>
+<h3 id="prerequisites"><a class="header" href="#prerequisites">Prerequisites</a></h3>
+<ol>
+<li><strong>Kleis</strong> compiled and in PATH (see <a href="01-starting-out.html">Starting Out</a>)</li>
+<li>A modern web browser (Chrome, Firefox, Safari, Edge)</li>
+</ol>
+<h3 id="launch"><a class="header" href="#launch">Launch</a></h3>
+<p>Start the server from the Kleis project root:</p>
+<pre><code class="language-bash">kleis-server
+</code></pre>
+<p>Then open the Graph Editor at
+<a href="http://localhost:3000/static/graph_editor.html">http://localhost:3000/static/graph_editor.html</a>.</p>
+<p>To load a specific domain, add a <code>?domain=</code> query parameter:</p>
+<pre><code>http://localhost:3000/static/graph_editor.html?domain=electronics
+http://localhost:3000/static/graph_editor.html?domain=bond
+http://localhost:3000/static/graph_editor.html?domain=petri
+http://localhost:3000/static/graph_editor.html?domain=graph_theory
+</code></pre>
+<p>The domain filter controls which palette sections and domain configuration
+(routing style, edge decorations, verification rules, simulation mode) are
+loaded.</p>
+<blockquote>
+<p><strong>Note:</strong> The server must be started from the repository root so it can find
+the <code>static/</code>, <code>stdlib/</code>, and <code>std_template_lib/</code> directories.</p>
+</blockquote>
+<h2 id="domains"><a class="header" href="#domains">Domains</a></h2>
+<p>The Graph Editor is domain-agnostic. Its behavior is configured entirely by
+<code>.kleist</code> template files loaded from the server at startup. Any template whose
+metadata includes a <code>ports</code> field becomes a placeable component; templates
+whose name starts with <code>__domain_</code> inject domain-wide configuration without
+appearing in the palette.</p>
+<p>Domain configuration keys control:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Key</th><th>Effect</th></tr>
+</thead>
+<tbody>
+<tr><td><code>routing_mode</code></td><td>Wire routing: <code>orthogonal</code> (Manhattan bends) or <code>direct</code> (straight lines)</td></tr>
+<tr><td><code>junction_style</code></td><td>Multi-port junction appearance: <code>dot</code> or <code>none</code></td></tr>
+<tr><td><code>multi_port_strategy</code></td><td>How legs fan out from a junction: <code>trunk_branch</code> or <code>star</code></td></tr>
+<tr><td><code>edge_decoration</code></td><td>Marker on wire endpoints: <code>none</code>, <code>arrow</code>, <code>half_arrow</code>, <code>inhibitor</code>, <code>causal_bar</code></td></tr>
+<tr><td><code>edge_direction</code></td><td><code>undirected</code> or <code>directed</code></td></tr>
+<tr><td><code>verify_*</code></td><td>Structural verification rules (see <a href="#verification">Verification</a>)</td></tr>
+<tr><td><code>sim_mode</code></td><td>Simulation mode: <code>discrete</code> or <code>continuous</code></td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="shipped-domains"><a class="header" href="#shipped-domains">Shipped Domains</a></h3>
+<p>Kleis ships with four domains:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Domain</th><th>Description</th><th>Routing</th><th>Decoration</th><th>Simulation</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>electronics</strong></td><td>Passive and active circuit components</td><td>orthogonal</td><td>none</td><td>—</td></tr>
+<tr><td><strong>bond_graph</strong></td><td>Bond graph modeling (effort/flow)</td><td>orthogonal</td><td>half_arrow</td><td>continuous</td></tr>
+<tr><td><strong>petri_net</strong></td><td>Petri nets (places, transitions, arcs)</td><td>orthogonal</td><td>arrow</td><td>discrete</td></tr>
+<tr><td><strong>graph_theory</strong></td><td>Generic vertices and edges</td><td>direct</td><td>none</td><td>—</td></tr>
+</tbody>
+</table>
+</div>
+<p>Each domain is defined by <code>.kleist</code> files in <code>std_template_lib/</code> and SVG
+assets in <code>static/svg/</code>. New domains can be added without modifying Rust code.</p>
+<h2 id="interface-layout"><a class="header" href="#interface-layout">Interface Layout</a></h2>
+<p>The editor has a three-panel layout with a toolbar header:</p>
+<pre><code>┌──────────────────── Header / Toolbar ─────────────────────┐
+│ Place  Connect  Move │ Rotate Del Clear │ Clean │ + − Fit │
+│                      │ Wires           │ Verify Simulate  │
+│                      │                 │ Copy Typst        │
+├──────────┬───────────────────────────────┬────────────────┤
+│ Palette  │                               │  Output Panel  │
+│          │         SVG Canvas            │  ┌──────────┐  │
+│ [Section]│                               │  │Matrix│AST│  │
+│  ○ Item  │   Components + Wires          │  │  Typst   │  │
+│  ○ Item  │                               │  │          │  │
+│          │                               │  │          │  │
+│──────────│                               │  │          │  │
+│Properties│                               │  │          │  │
+│  R: 1000 │                          100% │  │          │  │
+└──────────┴───────────────────────────────┴────────────────┘
+</code></pre>
+<ul>
+<li><strong>Palette</strong> (left) — component categories and items, loaded from templates.
+Below the palette sits the <strong>Properties</strong> panel for the selected component.</li>
+<li><strong>Canvas</strong> (center) — SVG drawing surface with a 20 px grid. Components are
+placed and wired here. A zoom indicator appears in the bottom-right corner.</li>
+<li><strong>Output Panel</strong> (right) — three tabs showing live representations of the
+graph: Matrix, AST, and Typst.</li>
+</ul>
+<h2 id="modes"><a class="header" href="#modes">Modes</a></h2>
+<p>The editor has three interaction modes, selectable from the toolbar or by
+keyboard shortcut. The active mode is highlighted in the toolbar and displayed
+in the status bar.</p>
+<h3 id="place-mode-p"><a class="header" href="#place-mode-p">Place Mode (P)</a></h3>
+<ol>
+<li>Select a component from the palette (it highlights blue).</li>
+<li>Click anywhere on the canvas to place it.</li>
+<li>The component snaps to the 20 px grid.</li>
+</ol>
+<p>Each component renders its SVG symbol and exposes colored port circles on
+hover. The status bar shows which component type is selected.</p>
+<h3 id="connect-mode-c"><a class="header" href="#connect-mode-c">Connect Mode (C)</a></h3>
+<ol>
+<li>Click a port circle on one component to start a wire.</li>
+<li>A dashed rubber-band preview follows your cursor.</li>
+<li>Click a port on another component to complete the connection.</li>
+</ol>
+<p>The editor creates a <strong>net</strong> — a set of connected ports that corresponds to a
+row in the incidence matrix. If you connect a port that already belongs to an
+existing net, the nets merge into a single hyperedge. This supports multi-way
+junctions naturally.</p>
+<p>Wire routing follows the domain’s <code>routing_mode</code>:</p>
+<ul>
+<li><strong>Orthogonal</strong> — Manhattan-style paths with right-angle bends. The preview
+snaps to horizontal and vertical segments.</li>
+<li><strong>Direct</strong> — straight line from port to port.</li>
+</ul>
+<h3 id="move-mode-m"><a class="header" href="#move-mode-m">Move Mode (M)</a></h3>
+<p>Click and drag a component to reposition it. Connected wires automatically
+reroute to follow the component.</p>
+<h2 id="editing"><a class="header" href="#editing">Editing</a></h2>
+<h3 id="rotate-and-delete"><a class="header" href="#rotate-and-delete">Rotate and Delete</a></h3>
+<ul>
+<li><strong>Rotate</strong> (R) — rotates the selected component 90° clockwise.</li>
+<li><strong>Delete</strong> (Del / Backspace) — deletes the selected component or wire.
+Deleting a component also removes all its net connections.</li>
+<li><strong>Clear</strong> — removes all components and wires from the canvas.</li>
+</ul>
+<h3 id="wire-editing"><a class="header" href="#wire-editing">Wire Editing</a></h3>
+<p>In orthogonal routing mode, wires have editable bend points:</p>
+<ul>
+<li><strong>Drag a segment</strong> — hover over a horizontal or vertical wire segment (the
+cursor changes to a resize arrow) and drag to slide the bend.</li>
+<li><strong>Double-click a segment</strong> — inserts a new pair of bend points, giving you
+finer control over the route.</li>
+<li><strong>Double-click a bend dot</strong> — simplifies the route by removing redundant
+bends.</li>
+<li><strong>Clean Wires</strong> — toolbar button that recomputes the default route for every
+wire in the schematic.</li>
+</ul>
+<h3 id="properties-panel"><a class="header" href="#properties-panel">Properties Panel</a></h3>
+<p>When a component is selected, the Properties panel (below the palette) shows
+its editable parameters. These are defined by the template’s <code>params</code> metadata
+— for example, a resistor has an <code>R</code> parameter, a capacitor has <code>C</code>.</p>
+<p>Changing a parameter value immediately updates the Matrix, AST, and Typst
+outputs.</p>
+<h3 id="causal-stroke-k"><a class="header" href="#causal-stroke-k">Causal Stroke (K)</a></h3>
+<p>In the bond graph domain, selecting a wire and pressing <strong>K</strong> cycles the
+causal stroke through three states: stroke at the <em>end</em> port, stroke at the
+<em>start</em> port, and <em>off</em>. Causal strokes appear as bar markers on the wire
+ends and are included in Typst export and in the causality verification
+checks.</p>
+<h2 id="navigation"><a class="header" href="#navigation">Navigation</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Action</th><th>Input</th></tr>
+</thead>
+<tbody>
+<tr><td>Zoom in/out</td><td>Mouse wheel (cursor-centered)</td></tr>
+<tr><td>Zoom in/out</td><td><strong>+</strong> / <strong>−</strong> toolbar buttons</td></tr>
+<tr><td>Fit to content</td><td><strong>Fit</strong> toolbar button</td></tr>
+<tr><td>Pan</td><td>Middle-mouse drag</td></tr>
+<tr><td>Pan</td><td>Hold <strong>Space</strong> + drag (cursor changes to grab hand)</td></tr>
+</tbody>
+</table>
+</div>
+<p>The current zoom level is displayed as a percentage in the bottom-right corner
+of the canvas.</p>
+<h2 id="keyboard-shortcuts"><a class="header" href="#keyboard-shortcuts">Keyboard Shortcuts</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Key</th><th>Action</th></tr>
+</thead>
+<tbody>
+<tr><td><code>P</code></td><td>Switch to Place mode</td></tr>
+<tr><td><code>C</code></td><td>Switch to Connect mode</td></tr>
+<tr><td><code>M</code></td><td>Switch to Move mode</td></tr>
+<tr><td><code>R</code></td><td>Rotate selected component 90°</td></tr>
+<tr><td><code>K</code></td><td>Toggle causal stroke on selected wire</td></tr>
+<tr><td><code>Delete</code> / <code>Backspace</code></td><td>Delete selected component or wire</td></tr>
+<tr><td><code>Escape</code></td><td>Cancel current connection / clear selection</td></tr>
+<tr><td><code>Space</code> (hold)</td><td>Pan mode (drag to pan)</td></tr>
+</tbody>
+</table>
+</div>
+<p>Keyboard shortcuts are disabled while focus is in a text input, textarea, or
+select element.</p>
+<h2 id="output-panels"><a class="header" href="#output-panels">Output Panels</a></h2>
+<p>The right panel has three tabs that update live as you edit the schematic.</p>
+<h3 id="matrix"><a class="header" href="#matrix">Matrix</a></h3>
+<p>Displays the <strong>signed incidence matrix</strong> as a dense table. Rows are nets,
+columns are ports. The first connection on a net is marked <strong>+1</strong> (green),
+subsequent connections are <strong>−1</strong> (red), and unconnected cells show <strong>0</strong>
+(grey). The matrix dimensions (nets × ports) are shown above the table.</p>
+<h3 id="ast"><a class="header" href="#ast">AST</a></h3>
+<p>Shows the JSON representation of the graph as an editor AST node. This is the
+<code>graph(...)</code> expression that would be evaluated by the Kleis runtime —
+containing the <code>SparseMatrix</code> topology and per-component operation data.</p>
+<h3 id="typst"><a class="header" href="#typst">Typst</a></h3>
+<p>Generates the Typst source code for the schematic, with placed <code>#image</code>
+calls for component symbols and <code>#line</code> calls for wires. Edge decorations
+(arrows, causal bars, etc.) are included when the domain specifies them.</p>
+<p>The <strong>Copy Typst</strong> toolbar button copies this output to your clipboard. You
+can paste it directly into a <code>.kleis</code> document and compile to PDF.</p>
+<h2 id="verification"><a class="header" href="#verification">Verification</a></h2>
+<p>The <strong>Verify</strong> toolbar button runs a two-phase verification:</p>
+<h3 id="phase-1-structural-checks-client-side"><a class="header" href="#phase-1-structural-checks-client-side">Phase 1: Structural Checks (Client-Side)</a></h3>
+<p>These checks run instantly in the browser. Which checks run depends on the
+domain’s <code>verify_*</code> configuration keys:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Rule</th><th>Config Key</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td>Bipartite structure</td><td><code>verify_bipartite</code></td><td>Arcs must cross between two specified groups (e.g. places and transitions in Petri nets)</td></tr>
+<tr><td>Exactly one of type</td><td><code>verify_exactly_one</code></td><td>Exactly one component of a given type must exist</td></tr>
+<tr><td>Requires type</td><td><code>verify_requires_type</code></td><td>At least one component of a given type must exist</td></tr>
+<tr><td>No isolated components</td><td><code>verify_no_isolated</code></td><td>Every component must be connected to at least one net</td></tr>
+<tr><td>All connected</td><td><code>verify_all_connected</code></td><td>The graph must be a single connected component (BFS reachability)</td></tr>
+<tr><td>Causality constraints</td><td><code>verify_causality</code></td><td>Bond graph junction causality rules are satisfied</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="phase-2-z3-verification-server-side"><a class="header" href="#phase-2-z3-verification-server-side">Phase 2: Z3 Verification (Server-Side)</a></h3>
+<p>If the domain specifies a <code>verify_theory</code>, the editor sends the graph topology
+and component data to <code>POST /api/verify_graph</code>. The server loads the named
+Kleis theory, encodes the graph constraints, and runs Z3 to check domain
+axioms. Results appear as additional pass/fail items in the verification
+overlay.</p>
+<p>The overlay shows a summary (all checks passed / issues found) with
+per-rule pass/fail icons. Click <strong>Close</strong> to dismiss.</p>
+<p><img src="../images/graph-editor/graph_editor_verify.png" alt="Verification overlay showing structural check results"></p>
+<p><em>The verification overlay reporting “Issues found” — one passing check (Requires VoltageSource) and one failing check (No isolated components).</em></p>
+<h2 id="simulation"><a class="header" href="#simulation">Simulation</a></h2>
+<p>The <strong>Simulate</strong> toolbar button opens a floating panel for time-domain
+simulation. The panel is draggable (via its title bar) and resizable. The
+simulation mode is determined by the domain’s <code>sim_mode</code> configuration.</p>
+<h3 id="controls"><a class="header" href="#controls">Controls</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Button</th><th>Action</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>Step</strong></td><td>Advance one simulation step</td></tr>
+<tr><td><strong>Play</strong> / <strong>Pause</strong></td><td>Toggle continuous playback</td></tr>
+<tr><td><strong>Reset</strong></td><td>Reset state to initial values (runs setup for continuous mode)</td></tr>
+<tr><td><strong>Close</strong></td><td>Close the simulation panel</td></tr>
+<tr><td><strong>−</strong> / <strong>+</strong></td><td>Decrease / increase playback speed</td></tr>
+</tbody>
+</table>
+</div>
+<p>The speed indicator shows steps per second (sps) for discrete mode, or
+time-constants per second (τ/s) for continuous mode with eigenvalue-adaptive
+stepping.</p>
+<h3 id="discrete-simulation"><a class="header" href="#discrete-simulation">Discrete Simulation</a></h3>
+<p>Used by domains like Petri nets. Each step:</p>
+<ol>
+<li>The server evaluates which components are <strong>enabled</strong> (e.g., transitions
+with sufficient tokens). Enabled components pulse with a green outline on
+the canvas.</li>
+<li>One enabled component fires (round-robin scheduling).</li>
+<li>The state vector updates and the canvas overlay reflects the new state.
+Components with <code>show_state: true</code> display their current value.</li>
+<li>A <strong>history list</strong> logs each step with the fired component name.</li>
+</ol>
+<p>If no component is enabled, the simulation reports <strong>halted</strong>.</p>
+<h3 id="continuous-simulation"><a class="header" href="#continuous-simulation">Continuous Simulation</a></h3>
+<p>Used by domains like electronics and bond graphs. Continuous simulation has a
+setup phase and a stepping phase:</p>
+<ol>
+<li><strong>Reset</strong> sends the graph to <code>POST /api/simulate_setup</code>, which extracts
+state-space matrices (A, B) from the domain theory using Z3. The status
+bar reports the number of state variables, inputs, time step (dt), and
+the fastest time constant (τ) if available.</li>
+<li><strong>Step</strong> / <strong>Play</strong> sends state vectors to <code>POST /api/simulate_graph</code> for
+numerical integration. Each server call integrates a chunk of steps
+(default 100) and returns the updated state.</li>
+<li>An <strong>oscilloscope</strong> display renders the trajectory as colored traces on a
+dark background with grid lines and axis labels. The oscilloscope supports:
+<ul>
+<li><strong>AutoSet</strong> — automatically scales time and voltage divisions to fit the
+visible traces</li>
+<li><strong>Copy Typst</strong> — exports the oscilloscope plot as Typst source for
+inclusion in documents</li>
+</ul>
+</li>
+</ol>
+<p><img src="../images/graph-editor/graph_editor_oscilloscope.png" alt="Bond graph simulation with oscilloscope display"></p>
+<p><em>The bond graph domain running a continuous simulation. The oscilloscope shows colored traces for each state variable over time, with AutoSet and Copy Typst controls. Component state values are overlaid on the canvas.</em></p>
+<h2 id="adding-new-domains"><a class="header" href="#adding-new-domains">Adding New Domains</a></h2>
+<p>The Graph Editor’s domain-agnostic architecture means new domains can be
+created without modifying any Rust code:</p>
+<ol>
+<li><strong>Create <code>.kleist</code> template files</strong> in <code>std_template_lib/</code> with <code>@template</code>
+blocks. Each component template needs <code>ports</code> metadata defining the
+connection points as <code>name:x,y</code> pairs.</li>
+<li><strong>Add a <code>__domain_*</code> template</strong> to configure routing, decorations,
+verification rules, and simulation mode.</li>
+<li><strong>Add SVG assets</strong> to <code>static/svg/&lt;domain&gt;/</code> for component symbols.</li>
+<li><strong>Optionally add a theory file</strong> for Z3-backed verification and continuous
+simulation.</li>
+</ol>
+<p>The editor discovers the new domain at startup via <code>/api/templates</code>.</p>
+<hr>
+<p>-&gt; <a href="./31-equation-editor.html">Previous: Equation Editor</a> | <a href="./30-sheet-music.html">Next: Sheet Music</a></p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../chapters/31-equation-editor.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../chapters/30-sheet-music.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../chapters/31-equation-editor.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../chapters/30-sheet-music.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-c2a407aa.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-a0b12cfe.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

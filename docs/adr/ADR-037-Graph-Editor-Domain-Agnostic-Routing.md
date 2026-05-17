@@ -1,7 +1,7 @@
 # ADR-037: Graph Editor with Domain-Agnostic Routing and Verification
 
-**Status:** Accepted & Implemented (Phases 1–10)
-**Date:** 2026-04-27 (original), 2026-05-14 (Phase 10 + eigenvalue-adaptive simulation)
+**Status:** Accepted & Implemented (Phases 1–13)
+**Date:** 2026-04-27 (original), 2026-05-15 (Phase 11: Nonlinear MNA), 2026-05-16 (Phase 12: Sparse stamp assembly), 2026-05-17 (Phase 13: Save/Load)
 **Relates to:** ADR-005 (Visual Authoring), ADR-022 (Z3 Integration), ADR-023
 (Template Externalization), ADR-035 (Multi-Domain Template Compiler), ADR-036
 (Multi-Domain Template Generality)
@@ -633,7 +633,38 @@ once, then the theory performs numerical integration.
 | Phase | Endpoint | What Happens |
 |-------|----------|--------------|
 | **Setup** | `POST /api/simulate_setup` | Load theory, eval_concrete for dimensions/mappings, run Z3 probes to extract A and B matrices |
-| **Integration** | `POST /api/simulate_graph` (mode=continuous) | Server injects A/B as preamble defines, theory's `sim_step(i)` performs Euler integration via eval_concrete |
+| **Integration** | `POST /api/simulate_graph` (mode=continuous) | Server injects state as preamble defines, calls theory's `sim_step(i)` via eval_concrete. Theory owns the integration method. |
+
+**Sequence Diagram (all continuous domains):**
+
+```
+Client                    Server                       Theory (.kleis)
+  │                         │                              │
+  ├─ simulate_setup ───────►│                              │
+  │                         ├─ Pass 1: eval_concrete ─────►│ sim_state_count, mappings
+  │                         │◄────────────────────────────┤
+  │                         ├─ Pass 2: Z3 probes ─────────►│ A/B from linearized model
+  │                         │◄────────────────────────────┤
+  │                         ├─ Pass 3: eval_concrete ─────►│ eigenvalue dt, tau_min
+  │                         │◄────────────────────────────┤
+  │◄── A/B, dt, state ─────┤                              │
+  │                         │                              │
+  ├─ simulate_graph ───────►│                              │
+  │   (mode=continuous)     ├─ inject sim_state ──────────►│
+  │                         ├─ eval_concrete ─────────────►│ sim_step(i)
+  │                         │                              │ (bond graph: ode45)
+  │                         │                              │ (electronics: Newton-Raphson)
+  │                         │◄────────────────────────────┤ new state
+  │◄── time_series ─────────┤                              │
+  │                         │                              │
+```
+
+The server is identical for all continuous domains. Only the theory's
+`sim_step(i)` implementation changes — bond graphs use the `ode45` builtin
+with the linear derivative `A*x + B*u`, electronics runs a full
+Newton-Raphson loop using `solve()`, `matrix()`, and native arithmetic.
+The server never knows which. `rk4_step` and `linear_deriv` are removed
+from `server.rs` — the theory owns the integration method.
 
 **Unit-Vector Probe Extraction:**
 
@@ -675,7 +706,7 @@ bindings `d_0`, `d_1`, ... from the "PROBE" example.
 | `sim_connected_net(c)` | Setup | integer | Net connected to 1-port component c |
 | `sim_initial_state(i)` | Setup | real | Initial value of state variable i |
 | `sim_input_value(k)` | Setup | real | Value of input source k |
-| `sim_step(i)` | Integration | real | New value of state variable i after one Euler step |
+| `sim_step(i)` | Integration | real | New value of state variable i after one timestep (theory chooses integration method) |
 | `sim_halted()` | Integration | boolean | Always false for continuous (client controls stop) |
 
 **Shared Preamble Names** (injected by server, consumed by theory):
@@ -765,13 +796,378 @@ When `tau_min` is available from the theory, the speed control label shows
 "τ/s" (taus per second) instead of "sps" (steps per second), reflecting
 that each "step" advances the simulation by one characteristic time scale.
 
+### Phase 11 (Planned): Nonlinear MNA Circuit Simulation
+
+Phases 9–10 established linear continuous simulation: Z3 extracts constant A/B
+matrices, then the theory integrates dx/dt = Ax + Bu. This assumes all elements
+are linear (R, L, C, sources). Phase 11 extends to **nonlinear elements**
+(diodes, BJTs, MOSFETs) using Modified Nodal Analysis with Newton-Raphson
+iteration — the same algorithm SPICE uses.
+
+**Why a new phase:** Nonlinear simulation uses the same three-pass setup
+protocol as bond graphs — Z3 extracts A/B from the **linearized model at
+the initial operating point**, providing eigenvalues, stability analysis,
+and adaptive dt selection. During time evolution, however, the theory's
+`sim_step(i)` runs Newton-Raphson iteration instead of Euler integration,
+because the Jacobian changes at every operating point.
+
+**Key architectural insight (proved May 14, 2026):**
+
+1. **Symbolic differentiation computes exact Jacobian entries.** The same
+   `diff()` from `stdlib/symbolic_diff.kleis` that derives Schwarzschild
+   curvature (Cartan geometry) computes Newton-Raphson conductance stamps
+   for diodes, BJTs, and MOSFETs. Verified in
+   `theories/test_electronics_jacobian.kleis` (15 tests, all pass).
+
+2. **No bridge function needed.** Kleis native arithmetic (`exp`, `sin`, `ln`,
+   `solve`, `matrix`, `ode45`, `fft`, `eigenvalues`) handles all simulation
+   computation directly. `diff()` derives formulas symbolically; simulation
+   runs natively, same as `theories/pot_phi4_oneloop_worked.kleis` computes
+   Feynman parameter integrals via `ode45`.
+
+3. **All builtins exist.** `solve`/`linsolve` (LAPACK) for J·Δx = -F,
+   `matrix` for Jacobian assembly, `eigenvalues` for stability analysis,
+   `fft`/`dft` for frequency analysis. No Rust changes needed.
+
+4. **Topology invariance.** Replacing a linear resistor with a nonlinear diode
+   between the same nodes does not change the Jacobian sparsity pattern. The
+   incidence matrix determines WHERE entries are stamped; the constitutive
+   equation determines WHAT value is stamped.
+
+**MNA formulation (vs bond graph effort/flow):**
+
+Electronics uses **Modified Nodal Analysis** with node voltages as unknowns,
+not the bond graph effort/flow formulation. The MNA system is:
+
+```
+J(x) · Δx = -F(x)     at each Newton iteration
+```
+
+where `x = [V₁, V₂, ..., Vₙ, I_Vs₁, I_Vs₂, ...]ᵀ` contains node voltages
+and voltage source branch currents. The Jacobian J is assembled by **stamping**
+each component's linearized contribution:
+
+| Component | Stamp type | Jacobian entry |
+|-----------|-----------|----------------|
+| Resistor | Constant conductance | G = 1/R |
+| Capacitor | Companion model (backward Euler) | G_C = C/Δt |
+| Inductor | Companion model (backward Euler) | G_L = Δt/L |
+| Diode | Linearized at operating point | g_d = (Is/nVt)·exp(Vd/nVt) |
+| BJT | 2×2 block (Ebers-Moll) | g_m, g_π, g_o |
+| MOSFET | 2×2 block (Level 1, region-dependent) | g_m, g_ds |
+| Voltage source | Branch equation | ±1 entries |
+
+The Newton loop at each timestep:
+1. Discretize C/L into companion models (algebraic from previous step)
+2. Linearize nonlinear elements at current voltage guess
+3. Stamp all contributions into J and F using `matrix()` builtin
+4. Solve J·Δx = -F using `solve()` builtin (LAPACK)
+5. Update x = x + Δx, check convergence
+6. Repeat until max(|Δx|) < tolerance
+
+**Simulation contract (extends Phase 8):**
+
+The electronics theory implements the same `sim_step(i)` / `sim_halted()`
+contract as Petri nets and bond graphs. The server remains domain-agnostic —
+it calls `eval_concrete` on theory-defined functions. The Newton-Raphson
+iteration lives entirely in the `.kleis` theory file.
+
+For nonlinear circuits, Z3 still extracts A/B at the initial operating point
+(linearized small-signal model) for eigenvalue analysis and dt selection.
+During time evolution, `sim_step(i)` implements the full Newton loop using
+native Kleis arithmetic:
+
+```kleis
+define sim_step(i) =
+    // ... Newton-Raphson using solve(), matrix(), native exp/sin/ln
+```
+
+**Companion model approach:**
+
+Reactive elements (C, L) are discretized at each timestep into Norton
+equivalents (conductance + current source). After discretization, the
+circuit is purely algebraic — no ODE solver runs inside the Newton loop.
+The time-stepping is implicit (backward Euler), handling stiff circuits
+naturally.
+
+**Constitutive equations as Kleis functions:**
+
+```kleis
+define diode_I(Vd)  = 2.52e-9 * (exp(Vd / 0.04529) - 1)
+define diode_gd(Vd) = (2.52e-9 / 0.04529) * exp(Vd / 0.04529)
+define bjt_Ic(Vbe, Vbc) = Is * (exp(Vbe/Vt) - 1) - (Is/α_R) * (exp(Vbc/Vt) - 1)
+define mos_Id_sat(Vgs) = (Kp/2) * (Vgs - Vth)^2
+```
+
+Symbolic `diff()` verifies each derivative matches the hand formula (test file).
+Simulation uses the native functions (performance).
+
+**Verified constitutive equations (from test_electronics_jacobian.kleis):**
+
+| Component | Jacobian entry | Verified value |
+|-----------|---------------|----------------|
+| Diode g_d at 0.7V forward | (Is/nVt)·exp(Vd/nVt) | 0.287 S |
+| Diode g_d at -1V reverse | same | 1.43×10⁻¹⁷ S |
+| MOSFET g_m at Vgs=3V (sat) | Kp·(Vgs-Vth) | 0.002 S (exact) |
+| MOSFET g_m (linear) | Kp·Vds | symbolic, correct |
+| MOSFET g_ds (linear) | Kp·(Vgs-Vth-Vds) | symbolic, correct |
+
+**Files:**
+
+| File | Role |
+|------|------|
+| `theories/electronics_mna_nonlinear.kleis` | MNA theory reference (structures, axioms, Jacobian layout) |
+| `theories/test_electronics_jacobian.kleis` | Proof of concept (15 verified examples) |
+| `stdlib/symbolic_diff.kleis` | Symbolic differentiation engine (shared with Cartan geometry) |
+| `std_template_lib/electronics.kleis` | Production theory (to be extended with sim contract) |
+
+**Bifurcation and nonlinear circuit characterization (future work):**
+
+Circuits like the astable multivibrator sit at unstable equilibria where the
+linearized A/B from Pass 2 show eigenvalues with positive real parts. The
+linearized model predicts divergence; reality gives a limit cycle. Challenges:
+
+- **Startup perturbation:** Newton-Raphson converges to the unstable DC
+  equilibrium because it IS a valid solution. The simulator needs a kick:
+  asymmetric initial conditions (e.g., `V_C1 = 0.001V, V_C2 = 0`) or
+  pseudo-random noise via a pure-Kleis LCG (linear congruential generator).
+  Kleis does not currently have a random number generator; an LCG is trivial
+  to implement in Kleis without Rust changes.
+
+- **FFT-based period discovery:** After the basic simulation works, the setup
+  phase can be extended (in the theory) to run a short transient, apply the
+  `fft()` builtin to the trajectory, and extract the dominant frequency and
+  settling time for adaptive dt/chunk_size selection. This needs heuristics
+  and trial-and-error.
+
+- **Adaptive dt from Newton convergence:** If the Newton loop exceeds an
+  iteration threshold, reduce dt and retry. Stiff transitions (diode
+  switching) need smaller timesteps.
+
+- **Eigenvalues at bifurcation:** Still useful — they give the instability
+  timescale, which is the right order of magnitude for dt. They just don't
+  predict the waveform shape or oscillation amplitude.
+
+This section is deliberately open-ended. The half-wave rectifier test circuit
+has a stable operating point and does not need bifurcation handling. The
+astable multivibrator will be the proving ground.
+
+**Stretch goal:** Simulate a Moog-style analog synthesizer voice (~30-50
+nodes, 20-40 nonlinear BJTs, 10+ op-amps) entirely in Kleis.
+
+**Back pocket: User-defined constitutive equations in the Graph Editor.**
+
+Phase 11 hardcodes constitutive equations in the theory file (`diode_I`,
+`bjt_Ic`, etc.). The natural next step is letting users type constitutive
+relations directly into components in the Graph Editor — e.g., entering
+`I = 0.01 * V^3` into a generic 2-port component. The infrastructure for
+this now exists:
+
+- The Equation Editor already produces Expression ASTs from user input
+- `diff()` computes the Jacobian entry from any Expression AST
+- The Newton-Raphson stamper only needs `I(V)` and `dI/dV` — it doesn't
+  care whether they came from a hardcoded function or a user-entered formula
+- Z3 can verify properties of the user's equation:
+  - Passivity: `∀V. V·I(V) ≥ 0` (energy dissipation)
+  - Causality: does the equation impose effort, flow, or accept either?
+  - Continuity: is `dI/dV` defined everywhere? (Newton convergence)
+- `component_type` becomes a checkable claim, not an assumption
+
+This turns the Graph Editor into a domain where users define new physics at
+the component level. The topology is invariant. The simulation adapts
+automatically because the Jacobian is derived, not hardcoded. A student
+could enter the van der Pol oscillator equation, a researcher could define
+a custom semiconductor model, an engineer could test a proprietary device
+characteristic — all without changing any Kleis code.
+
+This connects to the "envelope inference" capability noted in NEXT_SESSION.md:
+once constitutive relations are parametric and user-defined, Z3 queries over
+the parameters yield operating envelopes automatically.
+
+### Phase 12 (Implemented): Sparse Stamp Assembly for Newton-Raphson Performance
+
+Phase 11's Newton-Raphson implementation used dense Jacobian assembly: a
+triple-nested `map × map × list_fold` loop calling `stamp_J_component(c, n, m, v)`
+for every (row, col, component) combination — O(n²×nc) interpreter calls, most
+returning zero. For the multivibrator (6 nodes, 10 components), this was 360
+stamp calls per NR iteration, resulting in 1.3s per timestep (128s for 100 steps).
+
+**Root cause analysis:**
+
+The bottleneck was interpreter overhead, not the stamp computation or LAPACK
+solve. The evaluator's substitution-based model (`apply_function` builds a
+new expression tree via textual substitution for each call) makes each call
+expensive relative to the trivial arithmetic inside. Attempted mitigations
+that did NOT help:
+
+- **J_linear/J_nonlinear split:** Decomposing the Jacobian into constant
+  (linear component) and voltage-dependent (nonlinear component) parts.
+  The nested `map × map × list_fold` loop still executed for both halves,
+  and `is_vdep_jacobian` predicate checks (7 `∨` operations per component
+  per matrix cell) cost more than the stamps they skipped. Result: 144s
+  vs 128s baseline — slower, not faster.
+
+- **Define caching/memoization:** Unsafe in general because Kleis evaluation
+  is context-dependent through substitution. A define's body may reference
+  other defines whose bodies reference preamble values. No dependency
+  tracking exists to invalidate cached results.
+
+**Solution: Sparse entry-list stamps + native assembly builtins.**
+
+Two domain-agnostic evaluator builtins added to `src/evaluator/builtins.rs`:
+
+| Builtin | Signature | What it does |
+|---------|-----------|-------------|
+| `assemble_matrix` | `(n, entries)` → List-of-Lists | Builds n×n zero matrix, scatters `[row, col, value]` triples with `+=` |
+| `assemble_vector` | `(n, entries)` → List | Builds length-n zero vector, scatters `[index, value]` pairs with `+=` |
+
+Both operate entirely in native Rust (f64 allocation, iteration, addition)
+and return the format that `solve()` / `lapack_solve` already accepts. NOT
+behind `#[cfg(feature = "numerical")]` — they are pure list manipulation
+usable by any Kleis theory.
+
+**Theory refactoring in `electronics.kleis`:**
+
+Each stamp function was rewritten from a per-cell function (called n×n times)
+to an entry-list function (called once, returning a list of nonzero entries):
+
+```
+Before: stamp_J_resistor(c, n, m, v) → one scalar (called 36 times for 6×6)
+After:  stamp_J_resistor_entries(c, v) → [[p,p,g], [p,q,-g], [q,p,-g], [q,q,g]]
+```
+
+Entry counts per component type:
+
+| Component | J entries | F entries |
+|-----------|----------|----------|
+| Resistor | 4 | 2 |
+| Capacitor | 4 | 2 |
+| Diode/LED | 4 | 2 |
+| VoltageSource | 4 | 2 |
+| CurrentSource | 0 | 2 |
+| Ground | 1 | 1 |
+| NPN BJT | 6 | 3 |
+
+Assembly now folds over components once, collects all entries, then calls
+the native builtin:
+
+```kleis
+define mna_build_J(v) =
+    assemble_matrix(graph_nn_val,
+        list_fold(λ acc c . append(acc, stamp_J_entries(c, v)), [], range(graph_nc_val)))
+```
+
+**Performance results:**
+
+| Test | Before (dense) | After (sparse) | Speedup |
+|------|---------------|----------------|---------|
+| Rectifier (100 steps, 5 components, 3 nodes) | 5.7s | 1.24s | **4.6x** |
+| Multivibrator (100 steps, 10 components, 6 nodes) | 128s | 12.0s | **10.7x** |
+
+Numerical results are identical. The speedup scales with circuit complexity
+because the dense approach grows as O(n²×nc) while the sparse approach
+grows as O(nnz), and circuit Jacobians are inherently sparse — each
+component touches only 2-3 nodes out of potentially hundreds.
+
+**Scaling path for IC-scale circuits:**
+
+The `[row, col, value]` entry-list format is the universal sparse contract.
+The theory produces it identically regardless of circuit size. Only the
+solver backend changes:
+
+| Scale | Assembly | Solver |
+|-------|---------|--------|
+| Small (< 50 nodes) | `assemble_matrix` → dense List-of-Lists | LAPACK `dgesv` (current) |
+| Medium (50–5000) | CSC build from entries | KLU sparse direct (SuiteSparse) |
+| Large (5000+) | CSC build from entries | Iterative (GMRES + ILU preconditioner) |
+
+A future `sparse_solve(n, entries, rhs)` builtin would accept the same entry
+list, build a compressed sparse column representation, and call KLU — zero
+changes needed in `electronics.kleis`. The Rust ecosystem has `sparse21` and
+SuiteSparse bindings. Circuit Jacobians are inherently sparse because
+components connect only a few nodes each (unlike neural network weight
+matrices which are dense by construction).
+
+**Key architectural property:** The old per-cell stamp functions
+(`stamp_J_component`, `stamp_F_component`) are retained for verification
+and debugging but are no longer on the simulation hot path.
+
+### Phase 13 (Implemented): Graph Save / Load via `.kleis` Files
+
+The Graph Editor had no persistence — circuits had to be rebuilt manually each
+session. Phase 13 adds domain-agnostic Save/Save As/Load functionality where
+graphs are stored as valid `.kleis` programs.
+
+**The key insight:** Kleis programs *are* the file format. A saved graph is a
+`.kleis` file containing `define` statements that the Kleis parser and evaluator
+can load directly. No custom serialization, no JSON schema, no separate parser.
+
+**Save format:**
+
+```kleis
+define graph_domain = "electronics"
+
+define graph_components = [
+    ["c0", "dc_voltage", "VoltageSource", 100, 150, 0, [5.0]],
+    ["c1", "resistor",   "Resistor",      300, 150, 0, [1000.0]],
+    ...
+]
+
+define graph_nets = [
+    ["n0", [["c0", "pos"], ["c1", "left"]], []],
+    ...
+]
+```
+
+Each component entry stores: `[id, template_name, component_type, x, y, rotation, [params...]]`.
+Param values are in `.kleist` definition order (from `params:` metadata). Each net entry stores:
+`[id, [[componentId, portName], ...], [[waypoint_x, waypoint_y], ...]]`. Bond graph causal strokes
+are stored in an optional `graph_net_causal` define.
+
+**Server endpoints** (all domain-agnostic, in `server.rs`):
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/save_graph` | POST | Synthesizes `.kleis` text from `graphState` JSON. Uses `.kleist` `params:` metadata for parameter ordering. Writes to disk under `examples/`. |
+| `/api/load_graph?path=...` | GET | Reads `.kleis` file, parses via `parse_kleis_program`, loads into `Evaluator`, extracts `graph_domain`/`graph_components`/`graph_nets` via `eval_concrete`, maps positional params back to named params using `.kleist` lookup. |
+| `/api/list_graphs?domain=...` | GET | Lists `.kleis` files in `examples/{domain}/graph-editor/` for the Load dialog. |
+
+**Load flow:**
+
+```
+.kleis file → parse_kleis_program_with_file() → Evaluator.load_program()
+→ eval_concrete("graph_components") → Expression::List(...)
+→ walk AST to build JSON → return to client → loadGraphState()
+→ rebuild graphState → autoRouteAllNets() → fitToContent() → renderAll()
+```
+
+**Client-side changes:**
+- Save (Ctrl+S), Save As, Load buttons added to toolbar
+- `loadGraphState(data)` clears current state, rebuilds components/nets from
+  server response, computes next available IDs, auto-routes wires, fits to view
+- Load dialog fetches file list from server, prompts user to pick
+
+**What is NOT saved (derived on load):**
+- Incidence matrix — reconstructed from connections via `buildIncidenceMatrixJS()`
+- Port labels — reconstructed from component order + `.kleist` port definitions
+- Simulation state (`a_matrix`, `b_matrix`, `dt`, `state_map`) — recomputed by
+  `/api/simulate_setup` when the user starts simulation
+
+**Cross-domain verification:**
+Tested against all existing `server.rs` test circuits:
+- Electronics: rectifier (5 components), multivibrator (10 components, 3-port BJTs)
+- Bond graphs: RC circuit (4 components, 4-port junctions)
+- Petri nets: linear workflow (5 components, integer params, 4-port places)
+
+Seed files created in `examples/{domain}/graph-editor/` for immediate manual testing.
+
 ### WASM Status
 
 WASM was initially prototyped for graph logic but removed from the active code
 path due to overhead. All graph computations (incidence matrix construction,
 AST generation, preamble generation) are currently implemented in JavaScript
 (client-side) and Rust (server-side, synchronous). WASM may be revisited for
-computationally intensive operations (e.g., large graph layout, ODE simulation).
+computationally intensive operations (e.g., large graph layout, real-time visualization).
 
 ## Consequences
 
@@ -791,6 +1187,10 @@ computationally intensive operations (e.g., large graph layout, ODE simulation).
    untouched by graph editing work.
 6. **Server is domain-agnostic.** `server.rs` contains zero domain-specific
    code. All domain semantics live in `.kleis` theory files, interpreted by Z3.
+9. **Kleis programs are the save format.** Graph persistence uses `.kleis`
+   files with `define` statements — the parser itself is the format parser.
+   Save files are human-readable, git-diffable, and hand-editable. No custom
+   serialization library or schema needed.
 7. **Closed-world axioms prevent Z3 exploitation.** The preamble constrains all
    uninterpreted functions so Z3 cannot invent values for unconstrained inputs.
 8. **Theory declarations bridge preamble and theory.** Theories explicitly
@@ -805,12 +1205,15 @@ computationally intensive operations (e.g., large graph layout, ODE simulation).
 1. **Two editors to maintain.** The Graph Editor and Equation Editor share no
    rendering code. Future changes to common patterns (e.g., template loading)
    must be applied in both places.
-2. ~~**No bounded model checking.**~~ **Partially resolved by Phases 8–10.** The
-   domain-agnostic simulation architecture enables step-by-step state space
-   exploration (discrete via `sim_enabled`/`sim_fire`, continuous via Z3
-   state-space extraction + RK4 integration with eigenvalue-adaptive
-   timestep). Full reachability analysis (e.g., all reachable markings of a
-   Petri net) would require a generic BFS framework as a future extension.
+2. ~~**No bounded model checking.**~~ **Partially resolved by Phases 8–10,
+   extended by Phases 11–12.** The domain-agnostic simulation architecture
+   enables step-by-step state space exploration (discrete via
+   `sim_enabled`/`sim_fire`, linear continuous via Z3 state-space extraction
+   + RK4 integration with eigenvalue-adaptive timestep, nonlinear continuous
+   via Newton-Raphson MNA with sparse stamp assembly). Phase 12's 10x
+   speedup makes multi-hundred-step nonlinear simulations practical. Full
+   reachability analysis (e.g., all reachable markings of a Petri net) would
+   require a generic BFS framework as a future extension.
 3. **No persistent trunk waypoints for multi-port nets.** Trunk routing is
    recomputed each time; users cannot manually adjust trunk segments of
    multi-port nets (only 2-port nets have persistent draggable waypoints).
@@ -833,7 +1236,7 @@ computationally intensive operations (e.g., large graph layout, ODE simulation).
 |------|------|
 | `static/graph_editor.html` | Graph Editor HTML structure |
 | `static/js/graphEditorMain.js` | Core editor logic: interaction, routing, rendering, verification |
-| `src/bin/server.rs` | `/api/verify_graph` + `/api/simulate_setup` + `/api/simulate_graph` endpoints, domain-agnostic preamble generators |
+| `src/bin/server.rs` | `/api/verify_graph` + `/api/simulate_setup` + `/api/simulate_graph` + `/api/save_graph` + `/api/load_graph` + `/api/list_graphs` endpoints, domain-agnostic preamble generators |
 | **Template files (`.kleist`)** | |
 | `std_template_lib/electronics.kleist` | Electronics templates + `__domain_electronics` config |
 | `std_template_lib/bond_graph.kleist` | Bond graph templates + `__domain_bond_graph` config |
@@ -848,6 +1251,10 @@ computationally intensive operations (e.g., large graph layout, ODE simulation).
 | `static/svg/electronics/` | SVG assets for electronic components |
 | `static/svg/bond_graph/` | SVG assets for bond graph elements |
 | `static/svg/petri_net/` | SVG assets for Petri net elements |
+| **Saved graphs (`.kleis`)** | |
+| `examples/electronics/graph-editor/` | Electronics graph save files (rectifier, multivibrator) |
+| `examples/bond-graph/graph-editor/` | Bond graph save files (RC circuit) |
+| `examples/petri-nets/graph-editor/` | Petri net graph save files (linear workflow) |
 
 ## References
 

@@ -1,0 +1,286 @@
+// =============================================================================
+// Electronics Symbolic Jacobian — Proof of Concept
+// =============================================================================
+//
+// Demonstrates that symbolic differentiation (diff) computes exact Jacobian
+// entries for nonlinear electronic components. Same machinery that derives
+// Schwarzschild curvature now derives Newton-Raphson conductance stamps.
+//
+// Circuit: Half-wave rectifier with LC filter
+//
+//          R_s (10Ω)    L (1mH)       D1 (1N4148)
+//   Vs ─────┤├───── n1 ──∿∿∿── n2 ──|►── n3 ──┬── C (100μF) ── GND
+//   (12Vpk 60Hz)                                │
+//                                          R_L (1kΩ)
+//                                               │
+//                                              GND
+//
+// MNA unknowns: [V1, V2, V3, V4, I_Vs]
+// Nonlinear element: D1 (Shockley diode equation)
+// State variables: I_L (inductor current), V_C (capacitor voltage)
+//
+// =============================================================================
+
+import "stdlib/symbolic_diff.kleis"
+
+// =============================================================================
+// PART 1: Component Constitutive Equations as Expression ASTs
+// =============================================================================
+
+// --- Diode (Shockley equation) ---
+// I_D = Is · (exp(V_D / (n · V_T)) - 1)
+//
+// Parameters: 1N4148
+//   Is = 2.52 nA,  n = 1.752,  V_T = 25.85 mV
+define diode_nVt = 1.752 * 0.02585       // ≈ 0.04529 V
+
+define diode_I_expr =
+    e_mul(
+        num(2.52e-9),
+        e_sub(
+            e_exp(e_div(var("Vd"), num(diode_nVt))),
+            num(1)
+        )
+    )
+
+// --- BJT (Ebers-Moll, collector current in active region) ---
+// I_C = Is · (exp(V_BE / V_T) - 1)
+define bjt_Ic_expr =
+    e_mul(
+        num(1e-14),
+        e_sub(
+            e_exp(e_div(var("Vbe"), num(0.02585))),
+            num(1)
+        )
+    )
+
+// --- MOSFET (Level 1, saturation region) ---
+// I_D = (Kp/2) · (V_GS - V_th)²
+define mos_Id_sat_expr =
+    e_mul(
+        num(0.0005),
+        e_pow(e_sub(var("Vgs"), num(1.0)), num(2))
+    )
+
+// --- MOSFET (Level 1, linear region) ---
+// I_D = Kp · ((V_GS - V_th)·V_DS - V_DS²/2)
+define mos_Id_lin_expr =
+    e_mul(
+        num(0.001),
+        e_sub(
+            e_mul(e_sub(var("Vgs"), num(1.0)), var("Vds")),
+            e_div(e_pow(var("Vds"), num(2)), num(2))
+        )
+    )
+
+// --- Circuit parameters ---
+define Rs = 10.0
+define L_val = 0.001
+define C_val = 0.0001
+define RL = 1000.0
+
+// =============================================================================
+// PART 2: Symbolic Jacobian — Diode
+// =============================================================================
+
+example "DIODE: I(Vd) constitutive equation" {
+    out("I_D(Vd) = Is·(exp(Vd/(n·Vt)) - 1)")
+    out("Expression AST:")
+    out(diode_I_expr)
+}
+
+example "DIODE: dI/dVd = symbolic Jacobian entry (conductance g_d)" {
+    let gd_expr = diff(diode_I_expr, "Vd")
+    let gd_simplified = simplify(gd_expr)
+    out("g_d = dI_D/dVd (raw):")
+    out(gd_expr)
+    out("g_d = dI_D/dVd (simplified):")
+    out(gd_simplified)
+}
+
+example "DIODE: evaluate g_d at Vd=0.7V (forward bias)" {
+    let gd_expr = simplify(diff(diode_I_expr, "Vd"))
+    let gd_at_0_7 = subst(gd_expr, "Vd", num(0.7))
+    let gd_final = simplify(gd_at_0_7)
+    out("g_d(0.7V) = ")
+    out(gd_final)
+    out("This is the conductance stamped into the MNA Jacobian")
+    out("at each Newton-Raphson iteration when V_D ≈ 0.7V")
+}
+
+example "DIODE: evaluate g_d at Vd=-1V (reverse bias)" {
+    let gd_expr = simplify(diff(diode_I_expr, "Vd"))
+    let gd_at_neg1 = subst(gd_expr, "Vd", num(-1.0))
+    let gd_final = simplify(gd_at_neg1)
+    out("g_d(-1V) = ")
+    out(gd_final)
+    out("Tiny conductance — diode is effectively open circuit")
+}
+
+// =============================================================================
+// PART 3: Symbolic Jacobian — BJT
+// =============================================================================
+
+example "BJT: dIc/dVbe = transconductance g_m" {
+    let gm_expr = diff(bjt_Ic_expr, "Vbe")
+    let gm_simplified = simplify(gm_expr)
+    out("g_m = dI_C/dV_BE:")
+    out(gm_simplified)
+}
+
+example "BJT: g_m at Vbe=0.65V (active region)" {
+    let gm_expr = simplify(diff(bjt_Ic_expr, "Vbe"))
+    let gm_at_065 = simplify(subst(gm_expr, "Vbe", num(0.65)))
+    out("g_m(V_BE=0.65V) = ")
+    out(gm_at_065)
+}
+
+// =============================================================================
+// PART 4: Symbolic Jacobian — MOSFET
+// =============================================================================
+
+example "MOSFET SAT: dId/dVgs = transconductance g_m" {
+    let gm = simplify(diff(mos_Id_sat_expr, "Vgs"))
+    out("g_m(sat) = dI_D/dV_GS:")
+    out(gm)
+}
+
+example "MOSFET SAT: g_m at Vgs=3V" {
+    let gm = simplify(diff(mos_Id_sat_expr, "Vgs"))
+    let gm_at_3 = simplify(subst(gm, "Vgs", num(3.0)))
+    out("g_m(V_GS=3V) = Kp·(Vgs-Vth) = 0.001·2 = 0.002 S")
+    out(gm_at_3)
+}
+
+example "MOSFET LIN: dId/dVds = output conductance g_ds" {
+    let gds = simplify(diff(mos_Id_lin_expr, "Vds"))
+    out("g_ds(lin) = dI_D/dV_DS:")
+    out(gds)
+}
+
+example "MOSFET LIN: dId/dVgs = transconductance g_m" {
+    let gm = simplify(diff(mos_Id_lin_expr, "Vgs"))
+    out("g_m(lin) = dI_D/dV_GS:")
+    out(gm)
+}
+
+// =============================================================================
+// PART 5: MNA Jacobian Assembly for the Rectifier Circuit
+// =============================================================================
+//
+// The 5×5 Jacobian structure (topology determines sparsity):
+//
+//        V1       V2         V3         V4         I_Vs
+//   ┌                                                    ┐
+//   │  1/Rs    -1/Rs       0          0           1     │  KCL n1
+//   │ -1/Rs    1/Rs+Δt/L  -Δt/L       0           0     │  KCL n2
+//   │  0      -Δt/L       Δt/L+g_d   -g_d         0     │  KCL n3
+//   │  0       0          -g_d       g_d+C/Δt+1/RL 0     │  KCL n4
+//   │  1       0           0          0           0     │  Vs
+//   └                                                    ┘
+
+example "MNA: Jacobian diagonal entries at dt=10μs, Vd=0.7V" {
+    let dt = 0.00001
+    let G_Rs = 1.0 / Rs
+    let G_L = dt / L_val
+    let G_C = C_val / dt
+    let G_RL = 1.0 / RL
+
+    let gd_symbolic = simplify(diff(diode_I_expr, "Vd"))
+    let gd_at_07 = simplify(subst(gd_symbolic, "Vd", num(0.7)))
+
+    out("G_Rs  = 1/10    = ")
+    out(G_Rs)
+    out("G_L   = Δt/L    = ")
+    out(G_L)
+    out("G_C   = C/Δt    = ")
+    out(G_C)
+    out("G_RL  = 1/1000  = ")
+    out(G_RL)
+    out("g_d(0.7V)       = ")
+    out(gd_at_07)
+    out("")
+    out("J[1,1] = G_Rs          = ")
+    out(G_Rs)
+    out("J[2,2] = G_Rs + G_L    = ")
+    out(G_Rs + G_L)
+    out("J[3,3] = G_L + g_d     = (symbolic, contains g_d)")
+    out("J[4,4] = g_d + G_C + G_RL = (symbolic, contains g_d)")
+}
+
+// =============================================================================
+// PART 6: Companion Models — Verify Steady-State Consistency
+// =============================================================================
+
+example "COMPANION: Capacitor steady state (V constant → I=0)" {
+    let dt = 0.00001
+    let G_C = C_val / dt
+    let V_prev = 5.0
+    let V_now = 5.0
+    let I_companion = G_C * V_now + (-(G_C) * V_prev)
+    out("C companion current when V_prev = V_now = 5V:")
+    out(I_companion)
+    out("Expected: 0 (no current when voltage is constant)")
+}
+
+example "COMPANION: Inductor steady state (I constant → V=0)" {
+    let dt = 0.00001
+    let G_L = dt / L_val
+    let I_prev = 0.01
+    let V_across = 0.0
+    let I_companion = G_L * V_across + I_prev
+    out("L companion current when V_across = 0:")
+    out(I_companion)
+    out("Expected: I_prev = 0.01 (current maintained)")
+}
+
+// =============================================================================
+// PART 7: Second Derivatives (Hessian for convergence analysis)
+// =============================================================================
+
+example "DIODE: d²I/dVd² (second derivative for convergence bound)" {
+    let first = diff(diode_I_expr, "Vd")
+    let second = diff(first, "Vd")
+    let simplified = simplify(second)
+    out("d²I_D/dVd² = ")
+    out(simplified)
+    out("Large second derivative at forward bias means Newton may")
+    out("overshoot — adaptive damping or line search may be needed")
+}
+
+// =============================================================================
+// PART 8: Topology Invariance Demonstration
+// =============================================================================
+
+define resistor_I_expr = e_div(var("Vr"), num(Rs))
+
+example "TOPOLOGY INVARIANCE: Resistor Jacobian entry is constant" {
+    let g_resistor = simplify(diff(resistor_I_expr, "Vr"))
+    out("dI_R/dV_R = ")
+    out(g_resistor)
+    out("This is constant (1/R) — same sparsity position as g_d,")
+    out("but the value doesn't change with operating point.")
+    out("Replace diode with resistor: topology unchanged, only stamp value changes.")
+}
+
+// =============================================================================
+// Summary
+// =============================================================================
+//
+// This file proves that the same symbolic differentiation engine that
+// computes Schwarzschild curvature (Cartan geometry) can compute exact
+// Jacobian entries for Newton-Raphson circuit simulation:
+//
+//   diff(diode_I_expr, "Vd")   → g_d for MNA stamp
+//   diff(bjt_Ic_expr, "Vbe")   → g_m for BJT stamp
+//   diff(mos_Id_expr, "Vgs")   → g_m for MOSFET stamp
+//   diff(mos_Id_expr, "Vds")   → g_ds for MOSFET stamp
+//
+// The constitutive equation IS the single source of truth.
+// The Jacobian is DERIVED, not hand-coded.
+// The topology determines WHERE entries are stamped.
+// The constitutive equation determines WHAT value is stamped.
+//
+// From Einstein's field equations to diode I-V curves:
+// same platform, same abstraction.
+// =============================================================================

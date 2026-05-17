@@ -1,0 +1,18 @@
+// Kleis Graph — Bond Graph RC Circuit
+// Domain: bond_graph
+// Se(10V) — 1-junction — R(100Ω) ∥ C(1μF)
+
+define graph_domain = "bond_graph"
+
+define graph_components = [
+    ["c0", "bg_effort_source", "EffortSource", 100, 250, 0, [10.0]],
+    ["c1", "bg_junction_1",    "Junction1",    300, 250, 0, []],
+    ["c2", "bg_resistor",      "Resistor",     500, 150, 0, [100.0]],
+    ["c3", "bg_capacitor",     "Capacitor",    500, 350, 0, [1e-6, 0.0]]
+]
+
+define graph_nets = [
+    ["n0", [["c0", "port"],   ["c1", "left"]],   []],
+    ["n1", [["c1", "right"],  ["c2", "port"]],    []],
+    ["n2", [["c1", "bottom"], ["c3", "port"]],    []]
+]

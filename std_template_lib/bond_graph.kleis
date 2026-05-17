@@ -206,17 +206,33 @@ define sim_input_value(k) = graph_param_val(sim_input_map(k), 0)
 define sim_a_entry(i, j) = nth(nth(sim_A_val, i), j)
 define sim_b_entry(i, k) = nth(nth(sim_B_val, i), k)
 
-define sim_a_sum(i, j) =
-    if j < 0 then 0
-    else sim_a_entry(i, j) * nth(sim_state, j) + sim_a_sum(i, j - 1)
-
 define sim_b_sum(i, k) =
     if k < 0 then 0
     else sim_b_entry(i, k) * nth(sim_inputs, k) + sim_b_sum(i, k - 1)
 
-define sim_deriv_val(i) = sim_a_sum(i, sim_ns_val - 1) + sim_b_sum(i, sim_ni_val - 1)
+// Parameterized A·y sum for arbitrary state vector y
+define sim_a_sum_y(i, j, y) =
+    if j < 0 then 0
+    else sim_a_entry(i, j) * nth(y, j) + sim_a_sum_y(i, j - 1, y)
 
-define sim_step(i) = nth(sim_state, i) + sim_dt_val * sim_deriv_val(i)
+// ẋ_i = A[i,:]·y + B[i,:]·u for arbitrary state y
+define sim_deriv_at(i, y) =
+    sim_a_sum_y(i, sim_ns_val - 1, y) + sim_b_sum(i, sim_ni_val - 1)
+
+// Full derivative vector [ẋ_0, ..., ẋ_{ns-1}] for arbitrary state y
+define sim_deriv_vec(y) = map(λ i . sim_deriv_at(i, y), range(sim_ns_val))
+
+// x + s·k  (saxpy)
+define sim_vec_saxpy(x, s, k) =
+    map(λ i . nth(x, i) + s * nth(k, i), range(length(x)))
+
+// RK4 step: let-bindings evaluate eagerly → each stage computed once
+define sim_step(i) =
+    let k1 = sim_deriv_vec(sim_state) in
+    let k2 = sim_deriv_vec(sim_vec_saxpy(sim_state, 0.5 * sim_dt_val, k1)) in
+    let k3 = sim_deriv_vec(sim_vec_saxpy(sim_state, 0.5 * sim_dt_val, k2)) in
+    let k4 = sim_deriv_vec(sim_vec_saxpy(sim_state, sim_dt_val, k3)) in
+    nth(sim_state, i) + sim_dt_val / 6 * (nth(k1, i) + 2 * nth(k2, i) + 2 * nth(k3, i) + nth(k4, i))
 
 define sim_halted() = false
 

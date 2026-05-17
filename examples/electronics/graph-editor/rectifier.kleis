@@ -1,0 +1,19 @@
+// Kleis Graph — Half-Wave Rectifier
+// Domain: electronics
+// DC source → diode → R ∥ C → ground
+
+define graph_domain = "electronics"
+
+define graph_components = [
+    ["c0", "dc_voltage", "VoltageSource", 100, 150, 0, [5.0]],
+    ["c1", "diode",      "Diode",         300, 150, 0, [1e-12, 1.0, 0.02585]],
+    ["c2", "resistor",   "Resistor",      500, 150, 0, [1000.0]],
+    ["c3", "capacitor",  "Capacitor",     500, 350, 90, [1e-6, 0.0]],
+    ["c4", "ground",     "Ground",        100, 450, 0, []]
+]
+
+define graph_nets = [
+    ["n0", [["c0", "pos"],   ["c1", "anode"]],                                    []],
+    ["n1", [["c1", "cathode"], ["c2", "left"], ["c3", "left"]],                   []],
+    ["n2", [["c0", "neg"],   ["c2", "right"], ["c3", "right"], ["c4", "pin"]],    []]
+]

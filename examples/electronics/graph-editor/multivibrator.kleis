@@ -1,0 +1,27 @@
+// Kleis Graph — Astable Multivibrator
+// Domain: electronics
+// Two cross-coupled NPN BJTs with RC timing networks
+
+define graph_domain = "electronics"
+
+define graph_components = [
+    ["c0", "dc_voltage",     "VoltageSource", 400, 50,  0,  [5.0]],
+    ["c1", "resistor",       "Resistor",      200, 150, 0,  [1000.0]],
+    ["c2", "resistor",       "Resistor",      600, 150, 0,  [1000.0]],
+    ["c3", "resistor",       "Resistor",      150, 300, 90, [10000.0]],
+    ["c4", "resistor",       "Resistor",      650, 300, 90, [10000.0]],
+    ["c5", "capacitor",      "Capacitor",     300, 300, 0,  [10e-6, 0.1]],
+    ["c6", "capacitor",      "Capacitor",     500, 300, 0,  [10e-6, 0.0]],
+    ["c7", "npn_transistor", "NPN",           250, 450, 0,  [100.0, 1e-14, 0.02585]],
+    ["c8", "npn_transistor", "NPN",           550, 450, 0,  [100.0, 1e-14, 0.02585]],
+    ["c9", "ground",         "Ground",        400, 600, 0,  []]
+]
+
+define graph_nets = [
+    ["n0", [["c0", "pos"], ["c1", "left"], ["c2", "left"], ["c3", "left"], ["c4", "left"]], []],
+    ["n1", [["c1", "right"], ["c5", "left"], ["c7", "collector"]],                          []],
+    ["n2", [["c2", "right"], ["c6", "left"], ["c8", "collector"]],                          []],
+    ["n3", [["c3", "right"], ["c5", "right"], ["c7", "base"]],                              []],
+    ["n4", [["c4", "right"], ["c6", "right"], ["c8", "base"]],                              []],
+    ["n5", [["c0", "neg"], ["c7", "emitter"], ["c8", "emitter"], ["c9", "pin"]],            []]
+]

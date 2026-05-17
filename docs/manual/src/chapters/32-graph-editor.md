@@ -71,8 +71,8 @@ Kleis ships with four domains:
 
 | Domain | Description | Routing | Decoration | Simulation |
 |--------|-------------|---------|------------|------------|
-| **electronics** | Passive and active circuit components | orthogonal | none | — |
-| **bond_graph** | Bond graph modeling (effort/flow) | orthogonal | half_arrow | continuous |
+| **electronics** | Passive and active circuit components | orthogonal | none | continuous (nonlinear MNA) |
+| **bond_graph** | Bond graph modeling (effort/flow) | direct | half_arrow | continuous (linear state-space) |
 | **petri_net** | Petri nets (places, transitions, arcs) | orthogonal | arrow | discrete |
 | **graph_theory** | Generic vertices and edges | direct | none | — |
 
@@ -84,10 +84,10 @@ assets in `static/svg/`. New domains can be added without modifying Rust code.
 The editor has a three-panel layout with a toolbar header:
 
 ```
-┌──────────────────── Header / Toolbar ─────────────────────┐
-│ Place  Connect  Move │ Rotate Del Clear │ Clean │ + − Fit │
-│                      │ Wires           │ Verify Simulate  │
-│                      │                 │ Copy Typst        │
+┌──────────────────────── Header / Toolbar ────────────────────────┐
+│ Place  Connect  Move │ Rotate Del Clear │ Clean │ + − Fit │      │
+│                      │ Wires           │ Verify Simulate  │      │
+│                      │                 │ Copy Typst │ Save SaveAs Load │
 ├──────────┬───────────────────────────────┬────────────────┤
 │ Palette  │                               │  Output Panel  │
 │          │         SVG Canvas            │  ┌──────────┐  │
@@ -210,6 +210,7 @@ of the canvas.
 | `Delete` / `Backspace` | Delete selected component or wire |
 | `Escape` | Cancel current connection / clear selection |
 | `Space` (hold) | Pan mode (drag to pan) |
+| `Ctrl+S` / `Cmd+S` | Save graph to current file (or Save As if no file) |
 
 Keyboard shortcuts are disabled while focus is in a text input, textarea, or
 select element.
@@ -312,12 +313,17 @@ If no component is enabled, the simulation reports **halted**.
 Used by domains like electronics and bond graphs. Continuous simulation has a
 setup phase and a stepping phase:
 
-1. **Reset** sends the graph to `POST /api/simulate_setup`, which extracts
-   state-space matrices (A, B) from the domain theory using Z3. The status
-   bar reports the number of state variables, inputs, time step (dt), and
-   the fastest time constant (τ) if available.
-2. **Step** / **Play** sends state vectors to `POST /api/simulate_graph` for
-   numerical integration. Each server call integrates a chunk of steps
+1. **Reset** sends the graph to `POST /api/simulate_setup`, which queries the
+   domain theory for system dimensions (state variable count, input count,
+   initial conditions). For linear domains (bond graphs) it also extracts
+   state-space matrices (A, B) via Z3 probes. The status bar reports the
+   number of state variables, inputs, time step (dt), and the fastest time
+   constant (τ) if available.
+2. **Step** / **Play** sends state vectors to `POST /api/simulate_graph`.
+   The server calls the theory's `sim_step(i)` function for each state
+   variable — the theory owns the integration method. Bond graphs use RK4
+   on a linear state-space model; electronics uses Newton-Raphson on the
+   full nonlinear MNA system. Each server call integrates a chunk of steps
    (default 100) and returns the updated state.
 3. An **oscilloscope** display renders the trajectory as colored traces on a
    dark background with grid lines and axis labels. The oscilloscope supports:
@@ -330,6 +336,69 @@ setup phase and a stepping phase:
 
 *The bond graph domain running a continuous simulation. The oscilloscope shows colored traces for each state variable over time, with AutoSet and Copy Typst controls. Component state values are overlaid on the canvas.*
 
+## Save and Load
+
+Graphs can be saved to and loaded from `.kleis` files. The save format uses
+Kleis `define` statements, making saved files valid Kleis programs that are
+human-readable, git-diffable, and hand-editable.
+
+### Saving
+
+- **Save** (toolbar button or `Ctrl+S` / `Cmd+S`) — saves the current graph
+  to its existing file path. If no file has been saved or loaded yet, this
+  behaves as Save As.
+- **Save As** — prompts for a filename. The file is saved under
+  `examples/{domain}/graph-editor/{name}.kleis`.
+
+The saved file contains the full graph state: component positions, rotations,
+parameter values, net connections, waypoints, and causal strokes. Simulation
+state (A/B matrices, token counts) is not saved — it is recomputed when the
+graph is next simulated.
+
+### Loading
+
+- **Load** — fetches the list of saved graphs for the current domain from the
+  server. Pick a file by number from the list, and the graph is loaded onto the
+  canvas.
+
+On load, the editor clears the current graph, rebuilds all components and nets
+from the file, auto-routes wires, and fits the view to the loaded content.
+
+### File Format
+
+A saved graph is a valid `.kleis` program:
+
+```kleis
+define graph_domain = "electronics"
+
+define graph_components = [
+    ["c0", "dc_voltage", "VoltageSource", 100, 150, 0, [5.0]],
+    ["c1", "resistor",   "Resistor",      300, 150, 0, [1000.0]],
+    ["c2", "ground",     "Ground",        100, 400, 0, []]
+]
+
+define graph_nets = [
+    ["n0", [["c0", "pos"], ["c1", "left"]], []],
+    ["n1", [["c1", "right"], ["c2", "pin"]], []]
+]
+```
+
+Each component entry is `[id, template_name, component_type, x, y, rotation, [params...]]`.
+Parameter values follow the order defined in the `.kleist` template's `params:`
+metadata. Each net entry is `[id, connections, waypoints]`, where connections
+are `[componentId, portName]` pairs preserving connection order.
+
+### Seed Files
+
+Kleis ships with example graphs for each domain that you can load immediately:
+
+| File | Domain | Circuit |
+|------|--------|---------|
+| `examples/electronics/graph-editor/rectifier.kleis` | electronics | Half-wave rectifier (DC source, diode, R, C, ground) |
+| `examples/electronics/graph-editor/multivibrator.kleis` | electronics | Astable multivibrator (2 BJTs, 4 resistors, 2 capacitors) |
+| `examples/bond-graph/graph-editor/rc_circuit.kleis` | bond_graph | RC circuit (effort source, 1-junction, R, C) |
+| `examples/petri-nets/graph-editor/linear.kleis` | petri_net | Linear workflow (source, 2 transitions, place, sink) |
+
 ## Adding New Domains
 
 The Graph Editor's domain-agnostic architecture means new domains can be
@@ -341,8 +410,10 @@ created without modifying any Rust code:
 2. **Add a `__domain_*` template** to configure routing, decorations,
    verification rules, and simulation mode.
 3. **Add SVG assets** to `static/svg/<domain>/` for component symbols.
-4. **Optionally add a theory file** for Z3-backed verification and continuous
-   simulation.
+4. **Optionally add a theory file** (`.kleis`) for Z3-backed verification.
+   For simulation, the theory must define `sim_step(i)` (returns the next
+   value of state variable `i`), `sim_halted()`, and setup helpers
+   (`sim_state_count`, `sim_state_map`, `sim_initial_state`, etc.).
 
 The editor discovers the new domain at startup via `/api/templates`.
 

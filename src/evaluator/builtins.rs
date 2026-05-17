@@ -2302,6 +2302,110 @@ impl Evaluator {
                 }
             }
 
+            "assemble_matrix" => {
+                // assemble_matrix(n, entries)
+                // Build an n×n matrix from sparse (row, col, value) triples.
+                // Entries at the same position are summed (scatter-add).
+                // Returns List-of-Lists format compatible with solve().
+                if args.len() != 2 {
+                    return Ok(None);
+                }
+                let n = match self.as_integer(&args[0]) {
+                    Some(v) if v >= 0 => v as usize,
+                    _ => return Ok(None),
+                };
+                let entries = match &args[1] {
+                    Expression::List(items) => items,
+                    _ => return Ok(None),
+                };
+                let mut mat = vec![0.0f64; n * n];
+                for entry in entries {
+                    let triple = match entry {
+                        Expression::List(t) if t.len() == 3 => t,
+                        _ => {
+                            return Err(
+                                "assemble_matrix: each entry must be [row, col, value]".to_string()
+                            );
+                        }
+                    };
+                    let r = self
+                        .as_integer(&triple[0])
+                        .ok_or("assemble_matrix: row must be numeric")?
+                        as usize;
+                    let c = self
+                        .as_integer(&triple[1])
+                        .ok_or("assemble_matrix: col must be numeric")?
+                        as usize;
+                    let v = self
+                        .as_number(&triple[2])
+                        .ok_or("assemble_matrix: value must be numeric")?;
+                    if r < n && c < n {
+                        mat[r * n + c] += v;
+                    } else {
+                        return Err(format!(
+                            "assemble_matrix: index ({}, {}) out of bounds for {}×{} matrix",
+                            r, c, n, n
+                        ));
+                    }
+                }
+                let rows: Vec<Expression> = (0..n)
+                    .map(|i| {
+                        Expression::List(
+                            (0..n)
+                                .map(|j| Self::const_from_f64(mat[i * n + j]))
+                                .collect(),
+                        )
+                    })
+                    .collect();
+                Ok(Some(Expression::List(rows)))
+            }
+
+            "assemble_vector" => {
+                // assemble_vector(n, entries)
+                // Build a length-n vector from sparse (index, value) pairs.
+                // Entries at the same index are summed.
+                if args.len() != 2 {
+                    return Ok(None);
+                }
+                let n = match self.as_integer(&args[0]) {
+                    Some(v) if v >= 0 => v as usize,
+                    _ => return Ok(None),
+                };
+                let entries = match &args[1] {
+                    Expression::List(items) => items,
+                    _ => return Ok(None),
+                };
+                let mut vec_data = vec![0.0f64; n];
+                for entry in entries {
+                    let pair = match entry {
+                        Expression::List(t) if t.len() == 2 => t,
+                        _ => {
+                            return Err(
+                                "assemble_vector: each entry must be [index, value]".to_string()
+                            );
+                        }
+                    };
+                    let idx = self
+                        .as_integer(&pair[0])
+                        .ok_or("assemble_vector: index must be numeric")?
+                        as usize;
+                    let v = self
+                        .as_number(&pair[1])
+                        .ok_or("assemble_vector: value must be numeric")?;
+                    if idx < n {
+                        vec_data[idx] += v;
+                    } else {
+                        return Err(format!(
+                            "assemble_vector: index {} out of bounds for length-{} vector",
+                            idx, n
+                        ));
+                    }
+                }
+                Ok(Some(Expression::List(
+                    vec_data.iter().map(|&v| Self::const_from_f64(v)).collect(),
+                )))
+            }
+
             "vstack" | "append_rows" => {
                 // Vertical stack: append rows from B to bottom of A
                 // vstack(A, B) where A is m×n and B is k×n → (m+k)×n

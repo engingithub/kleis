@@ -515,6 +515,7 @@ const simState = {
     lastFired: null, // last fired component index (for round-robin)
     playing: false,
     playTimer: null,
+    playGeneration: 0,
     speed: 2,        // steps per second (index into SPEED_STOPS)
     // Continuous simulation state (populated by /api/simulate_setup)
     simMode: null,
@@ -615,7 +616,7 @@ async function simulateStepContinuous() {
         showSimStatus('No setup data — reset first', 'halted');
         return false;
     }
-    // Extract compact state from state_map indices
+    const gen = simState.playGeneration;
     const compactState = simState.stateMap.map(ci => simState.state[ci] || 0);
     const req = buildSimRequest({ type: 'Step' });
     req.state = compactState;
@@ -631,6 +632,9 @@ async function simulateStepContinuous() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(req),
         });
+        if (simState.playGeneration !== gen && simState.playing === false) {
+            return false;
+        }
         const data = await resp.json();
         if (data.error) {
             showSimStatus(`Error: ${data.error}`, 'halted');
@@ -672,12 +676,16 @@ async function simulateStepContinuous() {
 function startPlayback() {
     if (simState.playing) return;
     simState.playing = true;
+    simState.playGeneration++;
+    const gen = simState.playGeneration;
     updatePlayButton();
     const sps = SPEED_STOPS[simState.speed];
     const interval = Math.round(1000 / sps);
     showSimStatus(`Playing at ${speedLabelText()}`, 'running');
     simState.playTimer = setInterval(async () => {
+        if (simState.playGeneration !== gen) return;
         const ok = await simulateStep();
+        if (simState.playGeneration !== gen) return;
         if (!ok) stopPlayback();
     }, interval);
 }
@@ -685,6 +693,7 @@ function startPlayback() {
 function stopPlayback() {
     if (!simState.playing) return;
     simState.playing = false;
+    simState.playGeneration++;
     if (simState.playTimer) {
         clearInterval(simState.playTimer);
         simState.playTimer = null;
@@ -732,8 +741,10 @@ function setSimSpeed(idx) {
 }
 
 function updatePlayButton() {
-    const btn = document.getElementById('simPlay');
-    if (btn) btn.textContent = simState.playing ? 'Pause' : 'Play';
+    const playBtn = document.getElementById('simPlay');
+    const pauseBtn = document.getElementById('simPause');
+    if (playBtn) playBtn.style.display = simState.playing ? 'none' : '';
+    if (pauseBtn) pauseBtn.style.display = simState.playing ? '' : 'none';
 }
 
 async function simulateReset() {
@@ -847,7 +858,8 @@ function openSimPanel() {
         <h3>Simulation</h3>
         <div class="sim-controls">
             <button id="simStep" title="Advance one step">Step</button>
-            <button id="simPlay" title="Play / Pause">Play</button>
+            <button id="simPlay" title="Start continuous playback">Play</button>
+            <button id="simPause" title="Pause playback" style="display:none">Pause</button>
             <button id="simReset" title="Reset to initial state">Reset</button>
             <button id="simClose" title="Close simulation">Close</button>
         </div>
@@ -871,6 +883,7 @@ function openSimPanel() {
 
     document.getElementById('simStep').addEventListener('click', () => { stopPlayback(); simulateStep(); });
     document.getElementById('simPlay').addEventListener('click', togglePlayback);
+    document.getElementById('simPause').addEventListener('click', togglePlayback);
     document.getElementById('simReset').addEventListener('click', () => { stopPlayback(); simulateReset(); });
     document.getElementById('simClose').addEventListener('click', closeSimPanel);
     document.getElementById('simSpeedDown').addEventListener('click', () => setSimSpeed(simState.speed - 1));
@@ -1378,9 +1391,15 @@ function computeDefaultWaypoints(compA, portNameA, compB, portNameB) {
 
     const dA = getPortExitDir(compA, portNameA);
     const dB = getPortExitDir(compB, portNameB);
+
+    const obstacles = buildObstacleList(new Set());
+    if (obstacles.length > 0) {
+        const routed = routeOrthogonal(a, dA, b, dB, obstacles);
+        if (routed && routed.length > 2) return routed.slice(1, -1);
+    }
+
     const aIsH = dA.dy === 0;
     const bIsH = dB.dy === 0;
-
     if (aIsH && bIsH) {
         const midX = snapToGrid((a.x + dA.dx * WIRE_STUB + b.x + dB.dx * WIRE_STUB) / 2);
         return [{ x: midX, y: a.y }, { x: midX, y: b.y }];
@@ -1389,10 +1408,221 @@ function computeDefaultWaypoints(compA, portNameA, compB, portNameB) {
         const midY = snapToGrid((a.y + dA.dy * WIRE_STUB + b.y + dB.dy * WIRE_STUB) / 2);
         return [{ x: a.x, y: midY }, { x: b.x, y: midY }];
     }
-    if (aIsH) {
-        return [{ x: b.x, y: a.y }];
-    }
+    if (aIsH) return [{ x: b.x, y: a.y }];
     return [{ x: a.x, y: b.y }];
+}
+
+// ---------------------------------------------------------------------------
+// Grid-based Dijkstra orthogonal router (obstacle-aware)
+//
+// Algorithm (based on jose-mdz's Orthogonal Connector):
+//   1. Inflate all obstacle AABBs by SHAPE_MARGIN
+//   2. Collect "rulers" (x and y coordinates) from inflated edges + endpoints
+//   3. Generate candidate routing spots at ruler intersections
+//   4. Remove spots that fall inside any inflated obstacle
+//   5. Build a graph connecting adjacent spots orthogonally
+//   6. Dijkstra shortest path with bend penalty to minimise turns
+//   7. Simplify collinear intermediate points
+// ---------------------------------------------------------------------------
+
+const SHAPE_MARGIN = 10;
+
+function getComponentAABB(comp, margin) {
+    const { w, h } = getComponentSize(comp);
+    return {
+        x1: comp.x - margin,
+        y1: comp.y - margin,
+        x2: comp.x + w + margin,
+        y2: comp.y + h + margin,
+    };
+}
+
+function buildObstacleList(excludeIds) {
+    const obstacles = [];
+    for (const comp of graphState.components) {
+        if (excludeIds.has(comp.id)) continue;
+        obstacles.push(getComponentAABB(comp, SHAPE_MARGIN));
+    }
+    return obstacles;
+}
+
+function pointInsideAnyObstacle(p, obstacles) {
+    for (const o of obstacles) {
+        if (p.x > o.x1 && p.x < o.x2 && p.y > o.y1 && p.y < o.y2) return true;
+    }
+    return false;
+}
+
+function segmentClearOfObstacles(p1, p2, obstacles) {
+    const minX = Math.min(p1.x, p2.x), maxX = Math.max(p1.x, p2.x);
+    const minY = Math.min(p1.y, p2.y), maxY = Math.max(p1.y, p2.y);
+    for (const o of obstacles) {
+        if (maxX <= o.x1 || minX >= o.x2 || maxY <= o.y1 || minY >= o.y2) continue;
+        const isH = Math.abs(p1.y - p2.y) < 1;
+        if (isH && p1.y > o.y1 && p1.y < o.y2 && maxX > o.x1 && minX < o.x2) return false;
+        if (!isH && p1.x > o.x1 && p1.x < o.x2 && maxY > o.y1 && minY < o.y2) return false;
+    }
+    return true;
+}
+
+function routeOrthogonal(startPt, startDir, endPt, endDir, obstacles) {
+    if (obstacles.length === 0) return null;
+
+    const stub = WIRE_STUB;
+    const srcStub = { x: startPt.x + startDir.dx * stub, y: startPt.y + startDir.dy * stub };
+    const dstStub = { x: endPt.x + endDir.dx * stub, y: endPt.y + endDir.dy * stub };
+
+    const xSet = new Set();
+    const ySet = new Set();
+    for (const o of obstacles) {
+        xSet.add(o.x1); xSet.add(o.x2);
+        ySet.add(o.y1); ySet.add(o.y2);
+    }
+    for (const p of [startPt, srcStub, endPt, dstStub]) {
+        xSet.add(p.x); ySet.add(p.y);
+    }
+
+    const xs = [...xSet].sort((a, b) => a - b);
+    const ys = [...ySet].sort((a, b) => a - b);
+
+    const spots = [];
+    const key = (x, y) => `${x},${y}`;
+    const spotSet = new Set();
+
+    for (const x of xs) {
+        for (const y of ys) {
+            const p = { x, y };
+            if (!pointInsideAnyObstacle(p, obstacles)) {
+                const k = key(x, y);
+                if (!spotSet.has(k)) {
+                    spotSet.add(k);
+                    spots.push(p);
+                }
+            }
+        }
+    }
+
+    for (const p of [srcStub, dstStub]) {
+        const k = key(p.x, p.y);
+        if (!spotSet.has(k)) {
+            spotSet.add(k);
+            spots.push(p);
+        }
+    }
+
+    const dist = new Map();
+    const prev = new Map();
+    const dirMap = new Map();
+    const visited = new Set();
+
+    const nodesByX = new Map();
+    const nodesByY = new Map();
+    for (const p of spots) {
+        const k = key(p.x, p.y);
+        dist.set(k, Infinity);
+        if (!nodesByX.has(p.x)) nodesByX.set(p.x, []);
+        nodesByX.get(p.x).push(p);
+        if (!nodesByY.has(p.y)) nodesByY.set(p.y, []);
+        nodesByY.get(p.y).push(p);
+    }
+    for (const [, arr] of nodesByX) arr.sort((a, b) => a.y - b.y);
+    for (const [, arr] of nodesByY) arr.sort((a, b) => a.x - b.x);
+
+    function getNeighbors(p) {
+        const result = [];
+        const colNodes = nodesByX.get(p.x) || [];
+        for (const n of colNodes) {
+            if (n.y === p.y) continue;
+            if (segmentClearOfObstacles(p, n, obstacles)) result.push(n);
+            if (n.y > p.y) break;
+        }
+        for (let i = colNodes.length - 1; i >= 0; i--) {
+            const n = colNodes[i];
+            if (n.y === p.y) continue;
+            if (segmentClearOfObstacles(p, n, obstacles)) result.push(n);
+            if (n.y < p.y) break;
+        }
+        const rowNodes = nodesByY.get(p.y) || [];
+        for (const n of rowNodes) {
+            if (n.x === p.x) continue;
+            if (segmentClearOfObstacles(p, n, obstacles)) result.push(n);
+            if (n.x > p.x) break;
+        }
+        for (let i = rowNodes.length - 1; i >= 0; i--) {
+            const n = rowNodes[i];
+            if (n.x === p.x) continue;
+            if (segmentClearOfObstacles(p, n, obstacles)) result.push(n);
+            if (n.x < p.x) break;
+        }
+        return result;
+    }
+
+    const srcKey = key(srcStub.x, srcStub.y);
+    const dstKey = key(dstStub.x, dstStub.y);
+    dist.set(srcKey, 0);
+    const startDirLabel = startDir.dx !== 0 ? 'h' : 'v';
+    dirMap.set(srcKey, startDirLabel);
+
+    const queue = [{ k: srcKey, p: srcStub, d: 0 }];
+
+    while (queue.length > 0) {
+        let bestIdx = 0;
+        for (let i = 1; i < queue.length; i++) {
+            if (queue[i].d < queue[bestIdx].d) bestIdx = i;
+        }
+        const { k: curKey, p: curPt } = queue.splice(bestIdx, 1)[0];
+
+        if (visited.has(curKey)) continue;
+        visited.add(curKey);
+
+        if (curKey === dstKey) break;
+
+        const curDir = dirMap.get(curKey);
+        for (const nb of getNeighbors(curPt)) {
+            const nbKey = key(nb.x, nb.y);
+            if (visited.has(nbKey)) continue;
+            const edgeDist = Math.abs(nb.x - curPt.x) + Math.abs(nb.y - curPt.y);
+            const moveDir = nb.x === curPt.x ? 'v' : 'h';
+            const bendPenalty = curDir && moveDir !== curDir ? edgeDist * 0.5 : 0;
+            const newDist = dist.get(curKey) + edgeDist + bendPenalty;
+            if (newDist < dist.get(nbKey)) {
+                dist.set(nbKey, newDist);
+                prev.set(nbKey, curKey);
+                dirMap.set(nbKey, moveDir);
+                queue.push({ k: nbKey, p: nb, d: newDist });
+            }
+        }
+    }
+
+    if (!prev.has(dstKey) && srcKey !== dstKey) return null;
+
+    const dijkPath = [];
+    let cur = dstKey;
+    while (cur) {
+        const [px, py] = cur.split(',').map(Number);
+        dijkPath.push({ x: px, y: py });
+        if (cur === srcKey) break;
+        cur = prev.get(cur);
+    }
+    dijkPath.reverse();
+
+    const path = [startPt, ...dijkPath, endPt];
+    return simplifyOrthogonalPath(path);
+}
+
+function simplifyOrthogonalPath(points) {
+    if (points.length <= 2) return points;
+    const result = [points[0]];
+    for (let i = 1; i < points.length - 1; i++) {
+        const prev = result.at(-1);
+        const curr = points[i];
+        const next = points[i + 1];
+        const collinearX = Math.abs(prev.x - curr.x) < 1 && Math.abs(curr.x - next.x) < 1;
+        const collinearY = Math.abs(prev.y - curr.y) < 1 && Math.abs(curr.y - next.y) < 1;
+        if (!collinearX && !collinearY) result.push(curr);
+    }
+    result.push(points.at(-1));
+    return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -1474,22 +1704,37 @@ function computeTrunkBranch(net) {
         const jy = snapToGrid(proj.point.y);
         const junctionPt = { x: jx, y: jy };
 
-        let leg;
-        if (Math.abs(br.pos.x - jx) < 2 && Math.abs(br.pos.y - jy) < 2) {
-            leg = [br.pos, junctionPt];
-        } else if (br.isH) {
-            const stubX = br.pos.x + br.dir.dx * WIRE_STUB;
-            if (Math.abs(jy - br.pos.y) < 2) {
-                leg = [br.pos, junctionPt];
+        const brObs = buildObstacleList(new Set());
+        let leg = null;
+        if (brObs.length > 0 && (Math.abs(br.pos.x - jx) > 2 || Math.abs(br.pos.y - jy) > 2)) {
+            const adx = Math.abs(jx - br.pos.x);
+            const ady = Math.abs(jy - br.pos.y);
+            let jDir;
+            if (adx >= ady) {
+                jDir = { dx: jx > br.pos.x ? 1 : -1, dy: 0 };
             } else {
-                leg = [br.pos, { x: stubX, y: br.pos.y }, { x: stubX, y: jy }, junctionPt];
+                jDir = { dx: 0, dy: jy > br.pos.y ? 1 : -1 };
             }
-        } else {
-            const stubY = br.pos.y + br.dir.dy * WIRE_STUB;
-            if (Math.abs(jx - br.pos.x) < 2) {
+            const routed = routeOrthogonal(br.pos, br.dir, junctionPt, jDir, brObs);
+            if (routed && routed.length >= 2) leg = routed;
+        }
+        if (!leg) {
+            if (Math.abs(br.pos.x - jx) < 2 && Math.abs(br.pos.y - jy) < 2) {
                 leg = [br.pos, junctionPt];
+            } else if (br.isH) {
+                const stubX = br.pos.x + br.dir.dx * WIRE_STUB;
+                if (Math.abs(jy - br.pos.y) < 2) {
+                    leg = [br.pos, junctionPt];
+                } else {
+                    leg = [br.pos, { x: stubX, y: br.pos.y }, { x: stubX, y: jy }, junctionPt];
+                }
             } else {
-                leg = [br.pos, { x: br.pos.x, y: stubY }, { x: jx, y: stubY }, junctionPt];
+                const stubY = br.pos.y + br.dir.dy * WIRE_STUB;
+                if (Math.abs(jx - br.pos.x) < 2) {
+                    leg = [br.pos, junctionPt];
+                } else {
+                    leg = [br.pos, { x: br.pos.x, y: stubY }, { x: jx, y: stubY }, junctionPt];
+                }
             }
         }
         branches.push({ leg, junction: junctionPt });
@@ -1512,13 +1757,26 @@ function getMultiNetLegs(net) {
         if (!comp) return null;
         const pos = getPortWorldPos(comp, conn.portName);
         const dir = getPortExitDir(comp, conn.portName);
-        return pos ? { pos, dir, isH: dir.dy === 0 } : null;
+        return pos ? { conn, pos, dir, isH: dir.dy === 0 } : null;
     }).filter(Boolean);
     if (connData.length < 3) return [];
     const jx = snapToGrid(connData.reduce((s, c) => s + c.pos.x, 0) / connData.length);
     const jy = snapToGrid(connData.reduce((s, c) => s + c.pos.y, 0) / connData.length);
     const junction = { x: jx, y: jy };
-    const legs = connData.map(({ pos, dir, isH }) => {
+    const legs = connData.map(({ conn, pos, dir, isH }) => {
+        const legObs = buildObstacleList(new Set());
+        if (legObs.length > 0 && (Math.abs(pos.x - jx) > 2 || Math.abs(pos.y - jy) > 2)) {
+            const adx = Math.abs(jx - pos.x);
+            const ady = Math.abs(jy - pos.y);
+            let jDir;
+            if (adx >= ady) {
+                jDir = { dx: jx > pos.x ? 1 : -1, dy: 0 };
+            } else {
+                jDir = { dx: 0, dy: jy > pos.y ? 1 : -1 };
+            }
+            const routed = routeOrthogonal(pos, dir, junction, jDir, legObs);
+            if (routed && routed.length >= 2) return routed;
+        }
         if (Math.abs(pos.x - jx) < 2 && Math.abs(pos.y - jy) < 2) {
             return [pos, junction];
         }
@@ -1532,10 +1790,41 @@ function getMultiNetLegs(net) {
     return { legs, junctions: [junction], isTrunkBranch: false };
 }
 
-function buildSvgPathD(points) {
+function buildSvgPathD(points, crossings) {
     if (points.length < 2) return '';
+    if (!crossings || crossings.length === 0) {
+        let d = `M${points[0].x},${points[0].y}`;
+        for (let i = 1; i < points.length; i++) d += ` L${points[i].x},${points[i].y}`;
+        return d;
+    }
     let d = `M${points[0].x},${points[0].y}`;
-    for (let i = 1; i < points.length; i++) d += ` L${points[i].x},${points[i].y}`;
+    for (let i = 0; i < points.length - 1; i++) {
+        const p1 = points[i], p2 = points[i + 1];
+        const segCrossings = crossings.filter(c => c.segIdx === i);
+        if (segCrossings.length === 0) {
+            d += ` L${p2.x},${p2.y}`;
+            continue;
+        }
+        const isH = Math.abs(p1.y - p2.y) < 1;
+        if (isH) {
+            segCrossings.sort((a, b) => (p2.x > p1.x ? 1 : -1) * (a.x - b.x));
+        } else {
+            segCrossings.sort((a, b) => (p2.y > p1.y ? 1 : -1) * (a.y - b.y));
+        }
+        for (const c of segCrossings) {
+            const R = 6;
+            if (isH) {
+                const dir = p2.x > p1.x ? 1 : -1;
+                d += ` L${c.x - R * dir},${c.y}`;
+                d += ` A${R},${R} 0 0 ${dir > 0 ? 1 : 0} ${c.x + R * dir},${c.y}`;
+            } else {
+                const dir = p2.y > p1.y ? 1 : -1;
+                d += ` L${c.x},${c.y - R * dir}`;
+                d += ` A${R},${R} 0 0 ${dir > 0 ? 0 : 1} ${c.x},${c.y + R * dir}`;
+            }
+        }
+        d += ` L${p2.x},${p2.y}`;
+    }
     return d;
 }
 
@@ -1920,8 +2209,80 @@ function renderComponents() {
     }
 }
 
+function collectAllWireSegments() {
+    const segments = [];
+    for (const net of graphState.nets) {
+        if (net.connections.length < 2) continue;
+        if (net.connections.length === 2) {
+            const pts = getNetPathPoints(net);
+            for (let i = 0; i < pts.length - 1; i++) {
+                segments.push({ netId: net.id, p1: pts[i], p2: pts[i + 1] });
+            }
+        } else {
+            const multiResult = getMultiNetLegs(net);
+            if (multiResult && multiResult.legs) {
+                for (const leg of multiResult.legs) {
+                    for (let i = 0; i < leg.length - 1; i++) {
+                        segments.push({ netId: net.id, p1: leg[i], p2: leg[i + 1] });
+                    }
+                }
+            }
+        }
+    }
+    return segments;
+}
+
+function findWireCrossings(allSegments) {
+    const crossMap = new Map();
+    for (let a = 0; a < allSegments.length; a++) {
+        const sa = allSegments[a];
+        const aH = Math.abs(sa.p1.y - sa.p2.y) < 1;
+        const aV = Math.abs(sa.p1.x - sa.p2.x) < 1;
+        if (!aH && !aV) continue;
+        for (let b = a + 1; b < allSegments.length; b++) {
+            const sb = allSegments[b];
+            if (sb.netId === sa.netId) continue;
+            const bH = Math.abs(sb.p1.y - sb.p2.y) < 1;
+            const bV = Math.abs(sb.p1.x - sb.p2.x) < 1;
+            if (!bH && !bV) continue;
+            if (aH === bH) continue;
+            const h = aH ? sa : sb;
+            const v = aH ? sb : sa;
+            const hy = h.p1.y;
+            const hx1 = Math.min(h.p1.x, h.p2.x);
+            const hx2 = Math.max(h.p1.x, h.p2.x);
+            const vx = v.p1.x;
+            const vy1 = Math.min(v.p1.y, v.p2.y);
+            const vy2 = Math.max(v.p1.y, v.p2.y);
+            if (vx > hx1 + 2 && vx < hx2 - 2 && hy > vy1 + 2 && hy < vy2 - 2) {
+                const pt = { x: vx, y: hy };
+                const hKey = `${h.netId}:${h.p1.x},${h.p1.y}-${h.p2.x},${h.p2.y}`;
+                if (!crossMap.has(hKey)) crossMap.set(hKey, []);
+                crossMap.get(hKey).push(pt);
+            }
+        }
+    }
+    return crossMap;
+}
+
+function getCrossingsForPath(points, netId, crossMap) {
+    const result = [];
+    for (let i = 0; i < points.length - 1; i++) {
+        const segKey = `${netId}:${points[i].x},${points[i].y}-${points[i + 1].x},${points[i + 1].y}`;
+        const hits = crossMap.get(segKey);
+        if (hits) {
+            for (const pt of hits) result.push({ segIdx: i, x: pt.x, y: pt.y });
+        }
+    }
+    return result;
+}
+
 function renderWires() {
     wiresLayer.innerHTML = '';
+
+    const allSegs = collectAllWireSegments();
+    const crossMap = findWireCrossings(allSegs);
+
     for (const net of graphState.nets) {
         if (net.connections.length < 2) continue;
 
@@ -1931,10 +2292,11 @@ function renderWires() {
         if (net.connections.length === 2) {
             const pts = getNetPathPoints(net);
             if (pts.length < 2) continue;
+            const crossings = getCrossingsForPath(pts, net.id, crossMap);
 
             const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
             path.setAttribute('class', wireClass);
-            path.setAttribute('d', buildSvgPathD(pts));
+            path.setAttribute('d', buildSvgPathD(pts, crossings));
             path.dataset.netId = net.id;
             applyEdgeMarkers(path, isSel, net);
             wiresLayer.appendChild(path);
@@ -1976,9 +2338,10 @@ function renderWires() {
             const multiResult = getMultiNetLegs(net);
             if (multiResult && multiResult.legs) {
                 for (const leg of multiResult.legs) {
+                    const legCrossings = getCrossingsForPath(leg, net.id, crossMap);
                     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
                     path.setAttribute('class', wireClass);
-                    path.setAttribute('d', buildSvgPathD(leg));
+                    path.setAttribute('d', buildSvgPathD(leg, legCrossings));
                     path.dataset.netId = net.id;
                     applyEdgeMarkers(path, isSel, net);
                     wiresLayer.appendChild(path);
@@ -2385,6 +2748,11 @@ canvasContainer.addEventListener('wheel', (e) => {
 // ---------------------------------------------------------------------------
 
 document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        saveGraph();
+        return;
+    }
     const tag = e.target.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
     if (e.key === ' ') { spaceHeld = true; canvas.style.cursor = 'grab'; e.preventDefault(); return; }
@@ -2431,6 +2799,13 @@ if (btnCleanWires) btnCleanWires.addEventListener('click', autoRouteAllNets);
 
 const btnVerify = document.getElementById('btnVerify');
 if (btnVerify) btnVerify.addEventListener('click', verifyGraph);
+
+const btnSave = document.getElementById('btnSave');
+if (btnSave) btnSave.addEventListener('click', saveGraph);
+const btnSaveAs = document.getElementById('btnSaveAs');
+if (btnSaveAs) btnSaveAs.addEventListener('click', saveGraphAs);
+const btnLoad = document.getElementById('btnLoad');
+if (btnLoad) btnLoad.addEventListener('click', showLoadDialog);
 
 // Simulate button is wired in initApp() after loadComponentDefs() populates domainConfig
 
@@ -2745,6 +3120,292 @@ function copyTypstToClipboard() {
         statusBar.textContent = 'Typst copied to clipboard!';
         setTimeout(updateStatus, 2000);
     });
+}
+
+// ---------------------------------------------------------------------------
+// Save / Load
+// ---------------------------------------------------------------------------
+
+let currentFilePath = null;
+
+function getGraphStateForSave() {
+    const domain = DOMAIN_FILTER || 'unknown';
+    return {
+        domain,
+        components: graphState.components.map(c => {
+            const def = COMPONENT_DEFS[c.type];
+            return {
+                id: c.id,
+                type: c.type,
+                component_type: def?.componentType || c.type,
+                x: c.x,
+                y: c.y,
+                rotation: c.rotation || 0,
+                params: c.params || {},
+            };
+        }),
+        nets: graphState.nets.map(n => ({
+            id: n.id,
+            label: n.label || n.id,
+            connections: n.connections,
+            waypoints: n.waypoints || [],
+            causal: n.causal || null,
+        })),
+    };
+}
+
+async function saveGraph() {
+    if (!currentFilePath) {
+        saveGraphAs();
+        return;
+    }
+    await doSave(currentFilePath);
+}
+
+async function saveGraphAs() {
+    const defaultName = currentFilePath
+        ? currentFilePath.split('/').pop().replace('.kleis', '')
+        : 'untitled';
+    const startDir = currentFilePath
+        ? currentFilePath.substring(0, currentFilePath.lastIndexOf('/'))
+        : null;
+    openFilePicker('save', startDir || null, defaultName, (path) => {
+        doSave(path);
+    });
+}
+
+async function doSave(path) {
+    const payload = getGraphStateForSave();
+    payload.path = path;
+    statusBar.textContent = `Saving to ${path}...`;
+    try {
+        const resp = await fetch('/api/save_graph', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        if (data.ok) {
+            currentFilePath = data.path;
+            statusBar.textContent = `Saved: ${data.path}`;
+        } else {
+            statusBar.textContent = `Save failed: ${data.error}`;
+        }
+    } catch (e) {
+        statusBar.textContent = `Save error: ${e.message}`;
+    }
+    setTimeout(updateStatus, 3000);
+}
+
+async function showLoadDialog() {
+    const domain = DOMAIN_FILTER || 'unknown';
+    const startDir = currentFilePath
+        ? currentFilePath.substring(0, currentFilePath.lastIndexOf('/'))
+        : null;
+    openFilePicker('load', startDir || null, null, (path) => {
+        loadGraphFromPath(path);
+    });
+}
+
+let filePickerState = { mode: null, currentDir: null, onConfirm: null };
+
+async function openFilePicker(mode, startDir, defaultName, onConfirm) {
+    const domain = DOMAIN_FILTER || 'unknown';
+    filePickerState = { mode, currentDir: null, onConfirm };
+
+    const overlay = document.getElementById('filePickerOverlay');
+    const title = document.getElementById('filePickerTitle');
+    const inputRow = document.getElementById('filePickerInputRow');
+    const input = document.getElementById('filePickerInput');
+    const confirmBtn = document.getElementById('filePickerConfirm');
+
+    const isSave = mode === 'save';
+    title.textContent = isSave ? 'Save Graph As' : 'Open Graph';
+    inputRow.style.display = isSave ? 'flex' : 'none';
+    confirmBtn.style.display = isSave ? 'inline-block' : 'none';
+    confirmBtn.textContent = 'Save';
+    confirmBtn.className = isSave ? 'fp-primary' : '';
+
+    if (isSave) {
+        input.value = defaultName || 'untitled';
+    }
+
+    overlay.classList.add('visible');
+
+    const dir = startDir || (domain ? `api_domain:${domain}` : 'examples');
+    await navigateFilePicker(dir);
+
+    if (isSave) {
+        setTimeout(() => { input.focus(); input.select(); }, 50);
+    }
+}
+
+async function navigateFilePicker(dir) {
+    const list = document.getElementById('filePickerList');
+    list.innerHTML = '<div class="file-picker-empty">Loading...</div>';
+
+    let url;
+    if (dir.startsWith('api_domain:')) {
+        url = `/api/list_graphs?domain=${encodeURIComponent(dir.substring(11))}`;
+    } else {
+        url = `/api/list_graphs?dir=${encodeURIComponent(dir)}`;
+    }
+
+    try {
+        const resp = await fetch(url);
+        const data = await resp.json();
+        filePickerState.currentDir = data.current_dir;
+        renderFilePickerContents(data);
+    } catch (e) {
+        list.innerHTML = `<div class="file-picker-empty">Error: ${e.message}</div>`;
+    }
+}
+
+function renderFilePickerContents(data) {
+    const list = document.getElementById('filePickerList');
+    const input = document.getElementById('filePickerInput');
+    const confirmBtn = document.getElementById('filePickerConfirm');
+    const overlay = document.getElementById('filePickerOverlay');
+    const title = document.getElementById('filePickerTitle');
+    const isSave = filePickerState.mode === 'save';
+
+    const shortDir = data.current_dir || 'examples';
+    title.textContent = (isSave ? 'Save Graph As' : 'Open Graph') + ` \u2014 ${shortDir}`;
+
+    list.innerHTML = '';
+
+    if (data.parent != null) {
+        const li = document.createElement('li');
+        li.innerHTML = '<span class="fp-icon">\u{1F4C1}</span><span class="fp-name">..</span>';
+        li.addEventListener('click', () => navigateFilePicker(data.parent));
+        list.appendChild(li);
+    }
+
+    for (const dir of data.dirs) {
+        const li = document.createElement('li');
+        li.innerHTML = `<span class="fp-icon">\u{1F4C1}</span><span class="fp-name">${dir.name}/</span>`;
+        li.addEventListener('click', () => navigateFilePicker(dir.path));
+        list.appendChild(li);
+    }
+
+    for (const file of data.files) {
+        const li = document.createElement('li');
+        li.innerHTML = `<span class="fp-icon">\u{1F4C4}</span><span class="fp-name">${file.name}</span><span class="fp-path">.kleis</span>`;
+        li.addEventListener('click', () => {
+            if (isSave) {
+                input.value = file.name;
+                list.querySelectorAll('li').forEach(el => el.classList.remove('fp-active'));
+                li.classList.add('fp-active');
+            } else {
+                overlay.classList.remove('visible');
+                filePickerState.onConfirm(file.path);
+            }
+        });
+        if (!isSave) {
+            li.addEventListener('dblclick', () => {
+                overlay.classList.remove('visible');
+                filePickerState.onConfirm(file.path);
+            });
+        }
+        list.appendChild(li);
+    }
+
+    if (data.dirs.length === 0 && data.files.length === 0) {
+        list.innerHTML += '<div class="file-picker-empty">Empty directory</div>';
+    }
+
+    const doConfirm = () => {
+        const name = input.value.trim();
+        if (!name) return;
+        overlay.classList.remove('visible');
+        const path = `${filePickerState.currentDir}/${name}.kleis`;
+        filePickerState.onConfirm(path);
+    };
+
+    confirmBtn.onclick = doConfirm;
+    input.onkeydown = (e) => {
+        if (e.key === 'Enter') doConfirm();
+        if (e.key === 'Escape') overlay.classList.remove('visible');
+    };
+}
+
+document.getElementById('filePickerCancel').addEventListener('click', () => {
+    document.getElementById('filePickerOverlay').classList.remove('visible');
+});
+document.getElementById('filePickerOverlay').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) {
+        e.currentTarget.classList.remove('visible');
+    }
+});
+
+async function loadGraphFromPath(path) {
+    statusBar.textContent = `Loading ${path}...`;
+    try {
+        const resp = await fetch(`/api/load_graph?path=${encodeURIComponent(path)}`);
+        const data = await resp.json();
+        if (data.error) {
+            statusBar.textContent = `Load failed: ${data.error}`;
+            setTimeout(updateStatus, 3000);
+            return;
+        }
+        loadGraphState(data);
+        currentFilePath = path;
+        statusBar.textContent = `Loaded: ${path}`;
+        setTimeout(updateStatus, 3000);
+    } catch (e) {
+        statusBar.textContent = `Load error: ${e.message}`;
+        setTimeout(updateStatus, 3000);
+    }
+}
+
+function loadGraphState(data) {
+    graphState.components = [];
+    graphState.nets = [];
+    nextComponentId = 0;
+    nextNetId = 0;
+
+    if (data.components) {
+        for (const c of data.components) {
+            const comp = {
+                id: c.id || `c${nextComponentId}`,
+                type: c.type,
+                x: c.x || 0,
+                y: c.y || 0,
+                rotation: c.rotation || 0,
+                params: c.params || {},
+            };
+            graphState.components.push(comp);
+            const idNum = Number.parseInt(comp.id.replace(/\D/g, ''), 10);
+            if (!Number.isNaN(idNum) && idNum >= nextComponentId) nextComponentId = idNum + 1;
+        }
+    }
+
+    if (data.nets) {
+        for (const n of data.nets) {
+            const net = {
+                id: n.id || `n${nextNetId}`,
+                label: n.label || n.id || `n${nextNetId}`,
+                connections: (n.connections || []).map(c => ({
+                    componentId: c.componentId,
+                    portName: c.portName,
+                })),
+                waypoints: n.waypoints || [],
+            };
+            if (n.causal) net.causal = n.causal;
+            graphState.nets.push(net);
+            const idNum = Number.parseInt(net.id.replace(/\D/g, ''), 10);
+            if (!Number.isNaN(idNum) && idNum >= nextNetId) nextNetId = idNum + 1;
+        }
+    }
+
+    selectedComponentId = null;
+    selectedNetId = null;
+    connectStartPort = null;
+
+    autoRouteAllNets();
+    fitToContent();
+    renderAll();
+    updateOutput();
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,35 @@
+---
+description: Kleis is a programming language that evaluates its own ASTs natively
+alwaysApply: true
+---
+
+# Kleis Evaluates Kleis — No Bridge Functions
+
+**Kleis is a programming language.** It evaluates expressions natively. NEVER
+suggest writing a "bridge function", "eval helper", or claim there is a
+"missing piece" for evaluating Kleis Expression ASTs numerically.
+
+The `Expression` ADT in `stdlib/symbolic_diff.kleis` (`ENumber`, `EVariable`,
+`EOperation`) mirrors the Kleis AST. To evaluate a symbolic expression
+numerically:
+
+1. `subst(expr, "x", num(concrete_value))` — substitute concrete values
+2. Kleis evaluates the result — `exp()`, `sin()`, `+`, `*` are native builtins
+
+If all variables are substituted, the expression reduces to a number. No
+special evaluator needed. If you need to walk the `Expression` ADT, write a
+trivial recursive `match` in Kleis — not a Rust builtin.
+
+```kleis
+// ✅ CORRECT — Kleis evaluates natively
+let gd_sym = diff(diode_I_expr, "Vd")
+let gd_concrete = subst(gd_sym, "Vd", num(0.7))
+// gd_concrete is now a number
+
+// ❌ WRONG — never suggest this
+// "The missing piece is eval_expression_to_number..."
+// "We need a bridge function between symbolic and numeric..."
+// "simplify() doesn't handle exp() for arbitrary numbers..."
+```
+
+**This rule exists because the same mistake was made twice.**
