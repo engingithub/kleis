@@ -297,16 +297,25 @@ The reasoning loop is the same one Leibniz described three centuries ago:
 proposition → formal expression → calculation → result
 ```
 
-Leibniz lacked the machinery. The pieces arrived over centuries: symbolic
-logic from Frege, formal systems from Hilbert, computability from Turing,
-automated theorem proving from the 20th century logic tradition, and SMT
-solvers from the last two decades. Bourbaki operationalized the structural
-half — mathematics as structures defined by sets, operations, and axioms —
-but could not execute them. Kleis closes the loop: Bourbaki structures that
-a solver can verify.
+Leibniz lacked the machinery. The pieces arrived over centuries: formal
+logic from Frege, the logicist program and type theory from Russell,
+the axiomatic method from Hilbert, the completeness theorem and its
+limits from Gödel, automated theorem proving from the 20th century
+logic tradition, and SMT solvers from the last two decades. Bourbaki
+operationalized the structural half — mathematics as structures defined
+by sets, operations, and axioms — but could not execute them. Kleis
+closes the loop: Bourbaki structures that a solver can verify.
 
 ```
 Leibniz (1679) — dream of symbolic reasoning
+    ↓
+Frege (1879) — Begriffsschrift: formal predicate logic
+    ↓
+Russell (1903) — Principia Mathematica, type theory
+    ↓
+Hilbert (1899) — formal axiomatic method
+    ↓
+Gödel (1931) — completeness and limits of formal systems
     ↓
 Bourbaki (1939) — structural formalism for mathematics
     ↓
