@@ -44,7 +44,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-5d5b8dda.js";
+            window.path_to_searchindex_js = "../searchindex-9892617b.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-902ee45b.js"></script>
@@ -197,7 +197,7 @@ an AST, and a Typst rendering of the schematic — all updated live. Structural
 verification (with optional Z3 backing) and time-domain simulation are built
 in.</p>
 <p><img src="../images/graph-editor/graph_editor_overview.png" alt="Graph Editor overview showing the electronics domain with palette, canvas, and output panel"></p>
-<p><em>The electronics domain showing a series RLC circuit driven by a voltage source with ground. The palette (left) lists Passive, Active, Source, Connector, and Measurement components. The incidence matrix (right) updates live as components are wired.</em></p>
+<p><em>The electronics domain showing an astable multivibrator circuit with obstacle-aware routing and wire crossing hops. The palette (left) lists Passive, Active, Source, Connector, and Measurement components. The incidence matrix (right) updates live as components are wired.</em></p>
 <h2 id="quick-start"><a class="header" href="#quick-start">Quick Start</a></h2>
 <h3 id="prerequisites"><a class="header" href="#prerequisites">Prerequisites</a></h3>
 <ol>
@@ -254,8 +254,8 @@ appearing in the palette.</p>
 <tr><th>Domain</th><th>Description</th><th>Routing</th><th>Decoration</th><th>Simulation</th></tr>
 </thead>
 <tbody>
-<tr><td><strong>electronics</strong></td><td>Passive and active circuit components</td><td>orthogonal</td><td>none</td><td>—</td></tr>
-<tr><td><strong>bond_graph</strong></td><td>Bond graph modeling (effort/flow)</td><td>orthogonal</td><td>half_arrow</td><td>continuous</td></tr>
+<tr><td><strong>electronics</strong></td><td>Passive and active circuit components</td><td>orthogonal</td><td>none</td><td>continuous (nonlinear MNA)</td></tr>
+<tr><td><strong>bond_graph</strong></td><td>Bond graph modeling (effort/flow)</td><td>direct</td><td>half_arrow</td><td>continuous (linear state-space)</td></tr>
 <tr><td><strong>petri_net</strong></td><td>Petri nets (places, transitions, arcs)</td><td>orthogonal</td><td>arrow</td><td>discrete</td></tr>
 <tr><td><strong>graph_theory</strong></td><td>Generic vertices and edges</td><td>direct</td><td>none</td><td>—</td></tr>
 </tbody>
@@ -265,10 +265,10 @@ appearing in the palette.</p>
 assets in <code>static/svg/</code>. New domains can be added without modifying Rust code.</p>
 <h2 id="interface-layout"><a class="header" href="#interface-layout">Interface Layout</a></h2>
 <p>The editor has a three-panel layout with a toolbar header:</p>
-<pre><code>┌──────────────────── Header / Toolbar ─────────────────────┐
-│ Place  Connect  Move │ Rotate Del Clear │ Clean │ + − Fit │
-│                      │ Wires           │ Verify Simulate  │
-│                      │                 │ Copy Typst        │
+<pre><code>┌──────────────────────── Header / Toolbar ────────────────────────┐
+│ Place  Connect  Move │ Rotate Del Clear │ Clean │ + − Fit │      │
+│                      │ Wires           │ Verify Simulate  │      │
+│                      │                 │ Copy Typst │ Save SaveAs Load │
 ├──────────┬───────────────────────────────┬────────────────┤
 │ Palette  │                               │  Output Panel  │
 │          │         SVG Canvas            │  ┌──────────┐  │
@@ -384,6 +384,7 @@ of the canvas.</p>
 <tr><td><code>Delete</code> / <code>Backspace</code></td><td>Delete selected component or wire</td></tr>
 <tr><td><code>Escape</code></td><td>Cancel current connection / clear selection</td></tr>
 <tr><td><code>Space</code> (hold)</td><td>Pan mode (drag to pan)</td></tr>
+<tr><td><code>Ctrl+S</code> / <code>Cmd+S</code></td><td>Save graph to current file (or Save As if no file)</td></tr>
 </tbody>
 </table>
 </div>
@@ -474,12 +475,17 @@ Components with <code>show_state: true</code> display their current value.</li>
 <p>Used by domains like electronics and bond graphs. Continuous simulation has a
 setup phase and a stepping phase:</p>
 <ol>
-<li><strong>Reset</strong> sends the graph to <code>POST /api/simulate_setup</code>, which extracts
-state-space matrices (A, B) from the domain theory using Z3. The status
-bar reports the number of state variables, inputs, time step (dt), and
-the fastest time constant (τ) if available.</li>
-<li><strong>Step</strong> / <strong>Play</strong> sends state vectors to <code>POST /api/simulate_graph</code> for
-numerical integration. Each server call integrates a chunk of steps
+<li><strong>Reset</strong> sends the graph to <code>POST /api/simulate_setup</code>, which queries the
+domain theory for system dimensions (state variable count, input count,
+initial conditions). For linear domains (bond graphs) it also extracts
+state-space matrices (A, B) via Z3 probes. The status bar reports the
+number of state variables, inputs, time step (dt), and the fastest time
+constant (τ) if available.</li>
+<li><strong>Step</strong> / <strong>Play</strong> sends state vectors to <code>POST /api/simulate_graph</code>.
+The server calls the theory’s <code>sim_step(i)</code> function for each state
+variable — the theory owns the integration method. Bond graphs use RK4
+on a linear state-space model; electronics uses Newton-Raphson on the
+full nonlinear MNA system. Each server call integrates a chunk of steps
 (default 100) and returns the updated state.</li>
 <li>An <strong>oscilloscope</strong> display renders the trajectory as colored traces on a
 dark background with grid lines and axis labels. The oscilloscope supports:
@@ -493,6 +499,64 @@ inclusion in documents</li>
 </ol>
 <p><img src="../images/graph-editor/graph_editor_oscilloscope.png" alt="Bond graph simulation with oscilloscope display"></p>
 <p><em>The bond graph domain running a continuous simulation. The oscilloscope shows colored traces for each state variable over time, with AutoSet and Copy Typst controls. Component state values are overlaid on the canvas.</em></p>
+<h2 id="save-and-load"><a class="header" href="#save-and-load">Save and Load</a></h2>
+<p>Graphs can be saved to and loaded from <code>.kleis</code> files. The save format uses
+Kleis <code>define</code> statements, making saved files valid Kleis programs that are
+human-readable, git-diffable, and hand-editable.</p>
+<h3 id="saving"><a class="header" href="#saving">Saving</a></h3>
+<ul>
+<li><strong>Save</strong> (toolbar button or <code>Ctrl+S</code> / <code>Cmd+S</code>) — saves the current graph
+to its existing file path. If no file has been saved or loaded yet, this
+behaves as Save As.</li>
+<li><strong>Save As</strong> — prompts for a filename. The file is saved under
+<code>examples/{domain}/graph-editor/{name}.kleis</code>.</li>
+</ul>
+<p>The saved file contains the full graph state: component positions, rotations,
+parameter values, net connections, waypoints, and causal strokes. Simulation
+state (A/B matrices, token counts) is not saved — it is recomputed when the
+graph is next simulated.</p>
+<h3 id="loading"><a class="header" href="#loading">Loading</a></h3>
+<ul>
+<li><strong>Load</strong> — fetches the list of saved graphs for the current domain from the
+server. Pick a file by number from the list, and the graph is loaded onto the
+canvas.</li>
+</ul>
+<p>On load, the editor clears the current graph, rebuilds all components and nets
+from the file, auto-routes wires, and fits the view to the loaded content.</p>
+<h3 id="file-format"><a class="header" href="#file-format">File Format</a></h3>
+<p>A saved graph is a valid <code>.kleis</code> program:</p>
+<pre><code class="language-kleis">define graph_domain = "electronics"
+
+define graph_components = [
+    ["c0", "dc_voltage", "VoltageSource", 100, 150, 0, [5.0]],
+    ["c1", "resistor",   "Resistor",      300, 150, 0, [1000.0]],
+    ["c2", "ground",     "Ground",        100, 400, 0, []]
+]
+
+define graph_nets = [
+    ["n0", [["c0", "pos"], ["c1", "left"]], []],
+    ["n1", [["c1", "right"], ["c2", "pin"]], []]
+]
+</code></pre>
+<p>Each component entry is <code>[id, template_name, component_type, x, y, rotation, [params...]]</code>.
+Parameter values follow the order defined in the <code>.kleist</code> template’s <code>params:</code>
+metadata. Each net entry is <code>[id, connections, waypoints]</code>, where connections
+are <code>[componentId, portName]</code> pairs preserving connection order.</p>
+<h3 id="seed-files"><a class="header" href="#seed-files">Seed Files</a></h3>
+<p>Kleis ships with example graphs for each domain that you can load immediately:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>File</th><th>Domain</th><th>Circuit</th></tr>
+</thead>
+<tbody>
+<tr><td><code>examples/electronics/graph-editor/rectifier.kleis</code></td><td>electronics</td><td>Half-wave rectifier (DC source, diode, R, C, ground)</td></tr>
+<tr><td><code>examples/electronics/graph-editor/multivibrator.kleis</code></td><td>electronics</td><td>Astable multivibrator (2 BJTs, 4 resistors, 2 capacitors)</td></tr>
+<tr><td><code>examples/bond-graph/graph-editor/rc_circuit.kleis</code></td><td>bond_graph</td><td>RC circuit (effort source, 1-junction, R, C)</td></tr>
+<tr><td><code>examples/petri-nets/graph-editor/linear.kleis</code></td><td>petri_net</td><td>Linear workflow (source, 2 transitions, place, sink)</td></tr>
+</tbody>
+</table>
+</div>
 <h2 id="adding-new-domains"><a class="header" href="#adding-new-domains">Adding New Domains</a></h2>
 <p>The Graph Editor’s domain-agnostic architecture means new domains can be
 created without modifying any Rust code:</p>
@@ -503,8 +567,10 @@ connection points as <code>name:x,y</code> pairs.</li>
 <li><strong>Add a <code>__domain_*</code> template</strong> to configure routing, decorations,
 verification rules, and simulation mode.</li>
 <li><strong>Add SVG assets</strong> to <code>static/svg/&lt;domain&gt;/</code> for component symbols.</li>
-<li><strong>Optionally add a theory file</strong> for Z3-backed verification and continuous
-simulation.</li>
+<li><strong>Optionally add a theory file</strong> (<code>.kleis</code>) for Z3-backed verification.
+For simulation, the theory must define <code>sim_step(i)</code> (returns the next
+value of state variable <code>i</code>), <code>sim_halted()</code>, and setup helpers
+(<code>sim_state_count</code>, <code>sim_state_map</code>, <code>sim_initial_state</code>, etc.).</li>
 </ol>
 <p>The editor discovers the new domain at startup via <code>/api/templates</code>.</p>
 <hr>

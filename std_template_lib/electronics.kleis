@@ -54,7 +54,9 @@ define is_pnp(c) = graph_ctype(c) = TYPE_PNP
 define is_nmos(c) = graph_ctype(c) = TYPE_NMOS
 define is_pmos(c) = graph_ctype(c) = TYPE_PMOS
 define is_opamp(c) = graph_ctype(c) = TYPE_OpAmp
-define is_voltage_source(c) = graph_ctype(c) = TYPE_VoltageSource ∨ graph_ctype(c) = TYPE_ACVoltageSource
+define is_dc_vsource(c) = graph_ctype(c) = TYPE_VoltageSource
+define is_ac_vsource(c) = graph_ctype(c) = TYPE_ACVoltageSource
+define is_voltage_source(c) = is_dc_vsource(c) ∨ is_ac_vsource(c)
 define is_current_source(c) = graph_ctype(c) = TYPE_CurrentSource
 define is_ground(c) = graph_ctype(c) = TYPE_Ground
 define is_connector(c) = graph_ctype(c) = TYPE_Connector
@@ -212,6 +214,16 @@ define term_base(c) = graph_port_net_val(graph_comp_port0_val(c))
 define term_coll(c) = graph_port_net_val(graph_comp_port0_val(c) + 1)
 define term_emit(c) = graph_port_net_val(graph_comp_port0_val(c) + 2)
 
+// 3-port terminals (MOSFET: gate, drain, source per .kleist port order)
+define term_gate(c) = graph_port_net_val(graph_comp_port0_val(c))
+define term_drain(c) = graph_port_net_val(graph_comp_port0_val(c) + 1)
+define term_source(c) = graph_port_net_val(graph_comp_port0_val(c) + 2)
+
+// 3-port terminals (OpAmp: inv, non_inv, out per .kleist port order)
+define term_inv(c) = graph_port_net_val(graph_comp_port0_val(c))
+define term_noninv(c) = graph_port_net_val(graph_comp_port0_val(c) + 1)
+define term_out(c) = graph_port_net_val(graph_comp_port0_val(c) + 2)
+
 // Reverse lookup: state index for a given component
 define state_index_search(c, k) =
     if k >= sim_state_count then -1
@@ -254,6 +266,72 @@ define bjt_gbe(Vbe, Is, Vt) = diode_conductance(Vbe, Is, 1, Vt)
 define bjt_ic(Vbe, beta_f, Is, Vt) = beta_f * bjt_ib(Vbe, Is, Vt)
 define bjt_gm(Vbe, beta_f, Is, Vt) = beta_f * bjt_gbe(Vbe, Is, Vt)
 
+// Zener diode: forward diode + reverse breakdown beyond Vz.
+// Params: param(c,0)=Vz, param(c,1)=Is. Uses thermal voltage constant.
+define zener_Vt = 0.02585
+
+define zener_current(Vd, Vz, Is) =
+    let fwd = diode_current(Vd, Is, 1, zener_Vt) in
+    let vr = 0 - Vd - Vz in
+    let vc = diode_vcrit(1, zener_Vt) in
+    let rev = if vr > vc then
+        let ic_ = Is * (exp(vc / zener_Vt) - 1) in
+        let gc_ = Is / zener_Vt * exp(vc / zener_Vt) in
+        ic_ + gc_ * (vr - vc)
+    else if vr > 0 then Is * (exp(vr / zener_Vt) - 1)
+    else 0 in
+    fwd - rev
+
+define zener_conductance(Vd, Vz, Is) =
+    let gfwd = diode_conductance(Vd, Is, 1, zener_Vt) in
+    let vr = 0 - Vd - Vz in
+    let vc = diode_vcrit(1, zener_Vt) in
+    let grev = if vr > vc then Is / zener_Vt * exp(vc / zener_Vt)
+    else if vr > 0 then Is / zener_Vt * exp(vr / zener_Vt)
+    else 0 in
+    gfwd + grev
+
+// NMOS Level 1 (Shichman-Hodges). Params: param(c,0)=Kn, param(c,1)=Vth.
+define nmos_id(Vgs, Vds, Kn, Vth) =
+    if Vgs < Vth then 0
+    else if Vds < 0 then 0
+    else if Vds < Vgs - Vth then
+        Kn * ((Vgs - Vth) * Vds - 0.5 * Vds * Vds)
+    else 0.5 * Kn * (Vgs - Vth) * (Vgs - Vth)
+
+define nmos_gm(Vgs, Vds, Kn, Vth) =
+    if Vgs < Vth then 0
+    else if Vds < 0 then 0
+    else if Vds < Vgs - Vth then Kn * Vds
+    else Kn * (Vgs - Vth)
+
+define nmos_gds(Vgs, Vds, Kn, Vth) =
+    if Vgs < Vth then 0
+    else if Vds < 0 then 0
+    else if Vds < Vgs - Vth then Kn * (Vgs - Vth - Vds)
+    else 0
+
+// PMOS Level 1. Params: param(c,0)=Kp, param(c,1)=Vth (negative).
+// Operates on Vsg = V[source]-V[gate], Vsd = V[source]-V[drain].
+define pmos_id(Vsg, Vsd, Kp, Vth_abs) =
+    if Vsg < Vth_abs then 0
+    else if Vsd < 0 then 0
+    else if Vsd < Vsg - Vth_abs then
+        Kp * ((Vsg - Vth_abs) * Vsd - 0.5 * Vsd * Vsd)
+    else 0.5 * Kp * (Vsg - Vth_abs) * (Vsg - Vth_abs)
+
+define pmos_gm(Vsg, Vsd, Kp, Vth_abs) =
+    if Vsg < Vth_abs then 0
+    else if Vsd < 0 then 0
+    else if Vsd < Vsg - Vth_abs then Kp * Vsd
+    else Kp * (Vsg - Vth_abs)
+
+define pmos_gds(Vsg, Vsd, Kp, Vth_abs) =
+    if Vsg < Vth_abs then 0
+    else if Vsd < 0 then 0
+    else if Vsd < Vsg - Vth_abs then Kp * (Vsg - Vth_abs - Vsd)
+    else 0
+
 // =============================================================================
 // MNA Jacobian stamping — each component stamps into J[n][m]
 // =============================================================================
@@ -285,6 +363,9 @@ define stamp_J_ground(c, n, m, v) =
     let ng = sim_connected_net(c) in
     if n = ng then (if m = ng then 1e12 else 0) else 0
 
+define stamp_J_inductor(c, n, m, v) =
+    stamp_2port_J(term_pos(c), term_neg(c), sim_dt_val / graph_param_val(c, 0), n, m)
+
 // NPN BJT Jacobian: KCL at base, collector, emitter nodes.
 // Vbe = V[base] - V[emitter]; gbe and gm are the small-signal conductances.
 define stamp_J_npn(c, n, m, v) =
@@ -299,6 +380,63 @@ define stamp_J_npn(c, n, m, v) =
     else if n = ne then
         let ge = gbe + gm in
         if m = nb then 0 - ge else if m = ne then ge else 0
+    else 0
+
+// PNP BJT Jacobian: same structure as NPN but uses Veb = V[emit] - V[base].
+define stamp_J_pnp(c, n, m, v) =
+    let nb = term_base(c) in let nc_ = term_coll(c) in let ne = term_emit(c) in
+    let veb = nth(v, ne) - nth(v, nb) in
+    let gbe = bjt_gbe(veb, graph_param_val(c, 1), graph_param_val(c, 2)) in
+    let gm = bjt_gm(veb, graph_param_val(c, 0), graph_param_val(c, 1), graph_param_val(c, 2)) in
+    if n = nb then
+        if m = nb then gbe else if m = ne then 0 - gbe else 0
+    else if n = nc_ then
+        if m = nb then gm else if m = ne then 0 - gm else 0
+    else if n = ne then
+        let ge = gbe + gm in
+        if m = nb then 0 - ge else if m = ne then ge else 0
+    else 0
+
+define stamp_J_zener(c, n, m, v) =
+    let np = term_pos(c) in let nm_ = term_neg(c) in
+    let vd = nth(v, np) - nth(v, nm_) in
+    let gz = zener_conductance(vd, graph_param_val(c, 0), graph_param_val(c, 1)) in
+    stamp_2port_J(np, nm_, gz, n, m)
+
+// NMOS Jacobian: Id flows drain→source. gate draws no current.
+define stamp_J_nmos(c, n, m, v) =
+    let ng = term_gate(c) in let nd = term_drain(c) in let ns_ = term_source(c) in
+    let vgs = nth(v, ng) - nth(v, ns_) in
+    let vds = nth(v, nd) - nth(v, ns_) in
+    let gm = nmos_gm(vgs, vds, graph_param_val(c, 0), graph_param_val(c, 1)) in
+    let gds = nmos_gds(vgs, vds, graph_param_val(c, 0), graph_param_val(c, 1)) in
+    if n = nd then
+        if m = ng then gm else if m = nd then gds else if m = ns_ then 0 - gm - gds else 0
+    else if n = ns_ then
+        if m = ng then 0 - gm else if m = nd then 0 - gds else if m = ns_ then gm + gds else 0
+    else 0
+
+// PMOS Jacobian: current flows source→drain. Uses Vsg/Vsd and |Vth|.
+define stamp_J_pmos(c, n, m, v) =
+    let ng = term_gate(c) in let nd = term_drain(c) in let ns_ = term_source(c) in
+    let vsg = nth(v, ns_) - nth(v, ng) in
+    let vsd = nth(v, ns_) - nth(v, nd) in
+    let vth_abs = abs(graph_param_val(c, 1)) in
+    let gm = pmos_gm(vsg, vsd, graph_param_val(c, 0), vth_abs) in
+    let gds = pmos_gds(vsg, vsd, graph_param_val(c, 0), vth_abs) in
+    if n = ns_ then
+        if m = ng then 0 - gm else if m = nd then 0 - gds else if m = ns_ then gm + gds else 0
+    else if n = nd then
+        if m = ng then gm else if m = nd then gds else if m = ns_ then 0 - gm - gds else 0
+    else 0
+
+// Op-Amp Jacobian: V[out] = gain * (V[non_inv] - V[inv]).
+// Stamps only at the output node (infinite input impedance).
+define stamp_J_opamp(c, n, m, v) =
+    let ni = term_inv(c) in let nn = term_noninv(c) in let no = term_out(c) in
+    let a = graph_param_val(c, 0) in
+    if n = no then
+        if m = no then 1 else if m = nn then 0 - a else if m = ni then a else 0
     else 0
 
 // =============================================================================
@@ -327,6 +465,9 @@ define stamp_J_ground_entries(c, v) =
     let ng = sim_connected_net(c) in
     [[ng, ng, 1e12]]
 
+define stamp_J_inductor_entries(c, v) =
+    stamp_2port_J_entries(term_pos(c), term_neg(c), sim_dt_val / graph_param_val(c, 0))
+
 define stamp_J_npn_entries(c, v) =
     let nb = term_base(c) in let nc_ = term_coll(c) in let ne = term_emit(c) in
     let vbe = nth(v, nb) - nth(v, ne) in
@@ -336,6 +477,46 @@ define stamp_J_npn_entries(c, v) =
     [[nb, nb, gbe], [nb, ne, 0 - gbe],
      [nc_, nb, gm], [nc_, ne, 0 - gm],
      [ne, nb, 0 - ge], [ne, ne, ge]]
+
+define stamp_J_pnp_entries(c, v) =
+    let nb = term_base(c) in let nc_ = term_coll(c) in let ne = term_emit(c) in
+    let veb = nth(v, ne) - nth(v, nb) in
+    let gbe = bjt_gbe(veb, graph_param_val(c, 1), graph_param_val(c, 2)) in
+    let gm = bjt_gm(veb, graph_param_val(c, 0), graph_param_val(c, 1), graph_param_val(c, 2)) in
+    let ge = gbe + gm in
+    [[nb, nb, gbe], [nb, ne, 0 - gbe],
+     [nc_, nb, gm], [nc_, ne, 0 - gm],
+     [ne, nb, 0 - ge], [ne, ne, ge]]
+
+define stamp_J_zener_entries(c, v) =
+    let np = term_pos(c) in let nm_ = term_neg(c) in
+    let vd = nth(v, np) - nth(v, nm_) in
+    let gz = zener_conductance(vd, graph_param_val(c, 0), graph_param_val(c, 1)) in
+    stamp_2port_J_entries(np, nm_, gz)
+
+define stamp_J_nmos_entries(c, v) =
+    let ng = term_gate(c) in let nd = term_drain(c) in let ns_ = term_source(c) in
+    let vgs = nth(v, ng) - nth(v, ns_) in
+    let vds = nth(v, nd) - nth(v, ns_) in
+    let gm = nmos_gm(vgs, vds, graph_param_val(c, 0), graph_param_val(c, 1)) in
+    let gds = nmos_gds(vgs, vds, graph_param_val(c, 0), graph_param_val(c, 1)) in
+    [[nd, ng, gm], [nd, nd, gds], [nd, ns_, 0 - gm - gds],
+     [ns_, ng, 0 - gm], [ns_, nd, 0 - gds], [ns_, ns_, gm + gds]]
+
+define stamp_J_pmos_entries(c, v) =
+    let ng = term_gate(c) in let nd = term_drain(c) in let ns_ = term_source(c) in
+    let vsg = nth(v, ns_) - nth(v, ng) in
+    let vsd = nth(v, ns_) - nth(v, nd) in
+    let vth_abs = abs(graph_param_val(c, 1)) in
+    let gm = pmos_gm(vsg, vsd, graph_param_val(c, 0), vth_abs) in
+    let gds = pmos_gds(vsg, vsd, graph_param_val(c, 0), vth_abs) in
+    [[ns_, ng, 0 - gm], [ns_, nd, 0 - gds], [ns_, ns_, gm + gds],
+     [nd, ng, gm], [nd, nd, gds], [nd, ns_, 0 - gm - gds]]
+
+define stamp_J_opamp_entries(c, v) =
+    let ni = term_inv(c) in let nn = term_noninv(c) in let no = term_out(c) in
+    let a = graph_param_val(c, 0) in
+    [[no, no, 1], [no, nn, 0 - a], [no, ni, a]]
 
 // =============================================================================
 // MNA residual stamping — each component stamps into F[n]
@@ -376,6 +557,19 @@ define stamp_F_vsource(c, n, v) =
     else if n = nm_ then 0 - cur
     else 0
 
+// AC voltage source: V(t) = V_peak * sin(2*pi*freq*t).
+// Params: param(c,0)=V_peak, param(c,1)=freq. Uses sim_time_val from server.
+define stamp_F_acsource(c, n, v) =
+    let np = term_pos(c) in let nm_ = term_neg(c) in
+    let gs = 1e12 in
+    let vpeak = graph_param_val(c, 0) in
+    let freq = graph_param_val(c, 1) in
+    let vs = vpeak * sin(2 * pi * freq * sim_time_val) in
+    let cur = gs * (nth(v, np) - nth(v, nm_) - vs) in
+    if n = np then cur
+    else if n = nm_ then 0 - cur
+    else 0
+
 define stamp_F_csource(c, n, v) =
     let np = term_pos(c) in let nm_ = term_neg(c) in
     let is_val = graph_param_val(c, 0) in
@@ -388,6 +582,18 @@ define stamp_F_ground(c, n, v) =
     if n = ng then 1e12 * nth(v, ng)
     else 0
 
+// Inductor residual: backward Euler companion model.
+// i_L = i_L_prev + (dt/L) * v_L. State variable is inductor current.
+define stamp_F_inductor(c, n, v) =
+    let np = term_pos(c) in let nm_ = term_neg(c) in
+    let gl = sim_dt_val / graph_param_val(c, 0) in
+    let vl = nth(v, np) - nth(v, nm_) in
+    let il_prev = nth(sim_state, state_index_of(c)) in
+    let il = il_prev + gl * vl in
+    if n = np then il
+    else if n = nm_ then 0 - il
+    else 0
+
 // NPN BJT residual: I_B enters base, I_C enters collector, I_E leaves emitter.
 define stamp_F_npn(c, n, v) =
     let nb = term_base(c) in let nc_ = term_coll(c) in let ne = term_emit(c) in
@@ -397,6 +603,53 @@ define stamp_F_npn(c, n, v) =
     if n = nb then ib
     else if n = nc_ then ic
     else if n = ne then 0 - ib - ic
+    else 0
+
+// PNP BJT residual: uses Veb = V[emit] - V[base]. Signs reversed from NPN.
+define stamp_F_pnp(c, n, v) =
+    let nb = term_base(c) in let nc_ = term_coll(c) in let ne = term_emit(c) in
+    let veb = nth(v, ne) - nth(v, nb) in
+    let ib = bjt_ib(veb, graph_param_val(c, 1), graph_param_val(c, 2)) in
+    let ic = bjt_ic(veb, graph_param_val(c, 0), graph_param_val(c, 1), graph_param_val(c, 2)) in
+    if n = nb then 0 - ib
+    else if n = nc_ then 0 - ic
+    else if n = ne then ib + ic
+    else 0
+
+define stamp_F_zener(c, n, v) =
+    let np = term_pos(c) in let nm_ = term_neg(c) in
+    let vd = nth(v, np) - nth(v, nm_) in
+    let iz = zener_current(vd, graph_param_val(c, 0), graph_param_val(c, 1)) in
+    if n = np then iz
+    else if n = nm_ then 0 - iz
+    else 0
+
+// NMOS residual: Id flows from drain to source.
+define stamp_F_nmos(c, n, v) =
+    let ng = term_gate(c) in let nd = term_drain(c) in let ns_ = term_source(c) in
+    let vgs = nth(v, ng) - nth(v, ns_) in
+    let vds = nth(v, nd) - nth(v, ns_) in
+    let id = nmos_id(vgs, vds, graph_param_val(c, 0), graph_param_val(c, 1)) in
+    if n = nd then id
+    else if n = ns_ then 0 - id
+    else 0
+
+// PMOS residual: current flows from source to drain.
+define stamp_F_pmos(c, n, v) =
+    let ng = term_gate(c) in let nd = term_drain(c) in let ns_ = term_source(c) in
+    let vsg = nth(v, ns_) - nth(v, ng) in
+    let vsd = nth(v, ns_) - nth(v, nd) in
+    let vth_abs = abs(graph_param_val(c, 1)) in
+    let id = pmos_id(vsg, vsd, graph_param_val(c, 0), vth_abs) in
+    if n = ns_ then id
+    else if n = nd then 0 - id
+    else 0
+
+// Op-Amp residual: enforces V[out] = gain * (V[non_inv] - V[inv]).
+define stamp_F_opamp(c, n, v) =
+    let ni = term_inv(c) in let nn = term_noninv(c) in let no = term_out(c) in
+    let a = graph_param_val(c, 0) in
+    if n = no then nth(v, no) - a * (nth(v, nn) - nth(v, ni))
     else 0
 
 // =============================================================================
@@ -428,6 +681,14 @@ define stamp_F_vsource_entries(c, v) =
     let cur = 1e12 * (nth(v, np) - nth(v, nm_) - graph_param_val(c, 0)) in
     [[np, cur], [nm_, 0 - cur]]
 
+define stamp_F_acsource_entries(c, v) =
+    let np = term_pos(c) in let nm_ = term_neg(c) in
+    let vpeak = graph_param_val(c, 0) in
+    let freq = graph_param_val(c, 1) in
+    let vs = vpeak * sin(2 * pi * freq * sim_time_val) in
+    let cur = 1e12 * (nth(v, np) - nth(v, nm_) - vs) in
+    [[np, cur], [nm_, 0 - cur]]
+
 define stamp_F_csource_entries(c, v) =
     let np = term_pos(c) in let nm_ = term_neg(c) in
     let is_val = graph_param_val(c, 0) in
@@ -437,12 +698,53 @@ define stamp_F_ground_entries(c, v) =
     let ng = sim_connected_net(c) in
     [[ng, 1e12 * nth(v, ng)]]
 
+define stamp_F_inductor_entries(c, v) =
+    let np = term_pos(c) in let nm_ = term_neg(c) in
+    let gl = sim_dt_val / graph_param_val(c, 0) in
+    let vl = nth(v, np) - nth(v, nm_) in
+    let il_prev = nth(sim_state, state_index_of(c)) in
+    let il = il_prev + gl * vl in
+    [[np, il], [nm_, 0 - il]]
+
 define stamp_F_npn_entries(c, v) =
     let nb = term_base(c) in let nc_ = term_coll(c) in let ne = term_emit(c) in
     let vbe = nth(v, nb) - nth(v, ne) in
     let ib = bjt_ib(vbe, graph_param_val(c, 1), graph_param_val(c, 2)) in
     let ic = bjt_ic(vbe, graph_param_val(c, 0), graph_param_val(c, 1), graph_param_val(c, 2)) in
     [[nb, ib], [nc_, ic], [ne, 0 - ib - ic]]
+
+define stamp_F_pnp_entries(c, v) =
+    let nb = term_base(c) in let nc_ = term_coll(c) in let ne = term_emit(c) in
+    let veb = nth(v, ne) - nth(v, nb) in
+    let ib = bjt_ib(veb, graph_param_val(c, 1), graph_param_val(c, 2)) in
+    let ic = bjt_ic(veb, graph_param_val(c, 0), graph_param_val(c, 1), graph_param_val(c, 2)) in
+    [[nb, 0 - ib], [nc_, 0 - ic], [ne, ib + ic]]
+
+define stamp_F_zener_entries(c, v) =
+    let np = term_pos(c) in let nm_ = term_neg(c) in
+    let vd = nth(v, np) - nth(v, nm_) in
+    let iz = zener_current(vd, graph_param_val(c, 0), graph_param_val(c, 1)) in
+    [[np, iz], [nm_, 0 - iz]]
+
+define stamp_F_nmos_entries(c, v) =
+    let ng = term_gate(c) in let nd = term_drain(c) in let ns_ = term_source(c) in
+    let vgs = nth(v, ng) - nth(v, ns_) in
+    let vds = nth(v, nd) - nth(v, ns_) in
+    let id = nmos_id(vgs, vds, graph_param_val(c, 0), graph_param_val(c, 1)) in
+    [[nd, id], [ns_, 0 - id]]
+
+define stamp_F_pmos_entries(c, v) =
+    let ng = term_gate(c) in let nd = term_drain(c) in let ns_ = term_source(c) in
+    let vsg = nth(v, ns_) - nth(v, ng) in
+    let vsd = nth(v, ns_) - nth(v, nd) in
+    let vth_abs = abs(graph_param_val(c, 1)) in
+    let id = pmos_id(vsg, vsd, graph_param_val(c, 0), vth_abs) in
+    [[ns_, id], [nd, 0 - id]]
+
+define stamp_F_opamp_entries(c, v) =
+    let ni = term_inv(c) in let nn = term_noninv(c) in let no = term_out(c) in
+    let a = graph_param_val(c, 0) in
+    [[no, nth(v, no) - a * (nth(v, nn) - nth(v, ni))]]
 
 // =============================================================================
 // Component dispatch
@@ -451,9 +753,14 @@ define stamp_F_npn_entries(c, v) =
 define stamp_J_component(c, n, m, v) =
     if is_resistor(c) then stamp_J_resistor(c, n, m, v)
     else if is_capacitor(c) then stamp_J_capacitor(c, n, m, v)
-    else if is_inductor(c) then 0
+    else if is_inductor(c) then stamp_J_inductor(c, n, m, v)
     else if is_diode(c) ∨ is_led(c) then stamp_J_diode(c, n, m, v)
+    else if is_zener(c) then stamp_J_zener(c, n, m, v)
     else if is_npn(c) then stamp_J_npn(c, n, m, v)
+    else if is_pnp(c) then stamp_J_pnp(c, n, m, v)
+    else if is_nmos(c) then stamp_J_nmos(c, n, m, v)
+    else if is_pmos(c) then stamp_J_pmos(c, n, m, v)
+    else if is_opamp(c) then stamp_J_opamp(c, n, m, v)
     else if is_voltage_source(c) then stamp_J_vsource(c, n, m, v)
     else if is_current_source(c) then 0
     else if is_ground(c) then stamp_J_ground(c, n, m, v)
@@ -462,10 +769,16 @@ define stamp_J_component(c, n, m, v) =
 define stamp_F_component(c, n, v) =
     if is_resistor(c) then stamp_F_resistor(c, n, v)
     else if is_capacitor(c) then stamp_F_capacitor(c, n, v)
-    else if is_inductor(c) then 0
+    else if is_inductor(c) then stamp_F_inductor(c, n, v)
     else if is_diode(c) ∨ is_led(c) then stamp_F_diode(c, n, v)
+    else if is_zener(c) then stamp_F_zener(c, n, v)
     else if is_npn(c) then stamp_F_npn(c, n, v)
-    else if is_voltage_source(c) then stamp_F_vsource(c, n, v)
+    else if is_pnp(c) then stamp_F_pnp(c, n, v)
+    else if is_nmos(c) then stamp_F_nmos(c, n, v)
+    else if is_pmos(c) then stamp_F_pmos(c, n, v)
+    else if is_opamp(c) then stamp_F_opamp(c, n, v)
+    else if is_ac_vsource(c) then stamp_F_acsource(c, n, v)
+    else if is_dc_vsource(c) then stamp_F_vsource(c, n, v)
     else if is_current_source(c) then stamp_F_csource(c, n, v)
     else if is_ground(c) then stamp_F_ground(c, n, v)
     else 0
@@ -474,9 +787,14 @@ define stamp_F_component(c, n, v) =
 define stamp_J_entries(c, v) =
     if is_resistor(c) then stamp_J_resistor_entries(c, v)
     else if is_capacitor(c) then stamp_J_capacitor_entries(c, v)
-    else if is_inductor(c) then []
+    else if is_inductor(c) then stamp_J_inductor_entries(c, v)
     else if is_diode(c) ∨ is_led(c) then stamp_J_diode_entries(c, v)
+    else if is_zener(c) then stamp_J_zener_entries(c, v)
     else if is_npn(c) then stamp_J_npn_entries(c, v)
+    else if is_pnp(c) then stamp_J_pnp_entries(c, v)
+    else if is_nmos(c) then stamp_J_nmos_entries(c, v)
+    else if is_pmos(c) then stamp_J_pmos_entries(c, v)
+    else if is_opamp(c) then stamp_J_opamp_entries(c, v)
     else if is_voltage_source(c) then stamp_J_vsource_entries(c, v)
     else if is_current_source(c) then []
     else if is_ground(c) then stamp_J_ground_entries(c, v)
@@ -485,10 +803,16 @@ define stamp_J_entries(c, v) =
 define stamp_F_entries(c, v) =
     if is_resistor(c) then stamp_F_resistor_entries(c, v)
     else if is_capacitor(c) then stamp_F_capacitor_entries(c, v)
-    else if is_inductor(c) then []
+    else if is_inductor(c) then stamp_F_inductor_entries(c, v)
     else if is_diode(c) ∨ is_led(c) then stamp_F_diode_entries(c, v)
+    else if is_zener(c) then stamp_F_zener_entries(c, v)
     else if is_npn(c) then stamp_F_npn_entries(c, v)
-    else if is_voltage_source(c) then stamp_F_vsource_entries(c, v)
+    else if is_pnp(c) then stamp_F_pnp_entries(c, v)
+    else if is_nmos(c) then stamp_F_nmos_entries(c, v)
+    else if is_pmos(c) then stamp_F_pmos_entries(c, v)
+    else if is_opamp(c) then stamp_F_opamp_entries(c, v)
+    else if is_ac_vsource(c) then stamp_F_acsource_entries(c, v)
+    else if is_dc_vsource(c) then stamp_F_vsource_entries(c, v)
     else if is_current_source(c) then stamp_F_csource_entries(c, v)
     else if is_ground(c) then stamp_F_ground_entries(c, v)
     else []
@@ -534,7 +858,11 @@ define nr_iterate(v, iter) =
 
 define extract_state(i, v) =
     let c = sim_state_map(i) in
-    nth(v, term_pos(c)) - nth(v, term_neg(c))
+    if is_inductor(c) then
+        let gl = sim_dt_val / graph_param_val(c, 0) in
+        nth(sim_state, i) + gl * (nth(v, term_pos(c)) - nth(v, term_neg(c)))
+    else
+        nth(v, term_pos(c)) - nth(v, term_neg(c))
 
 define sim_step(i) =
     let v_converged = nr_iterate(nr_zero_guess, 0) in

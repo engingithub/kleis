@@ -626,6 +626,7 @@ async function simulateStepContinuous() {
     req.inputs = simState.inputs;
     req.dt = simState.dt;
     req.chunk_size = simState.chunkSize;
+    req.sim_time = simState.time || 0;
     try {
         const resp = await fetch('/api/simulate_graph', {
             method: 'POST',

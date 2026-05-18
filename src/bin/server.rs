@@ -2588,6 +2588,7 @@ fn simulate_setup_core(req: SimulateSetupRequest) -> SimulateSetupResponse {
         inputs: None,
         dt: None,
         chunk_size: None,
+        sim_time: None,
     };
 
     let sim_preamble = build_sim_preamble(&sim_req, &sim_req.state, &theory_source);
@@ -3072,6 +3073,8 @@ struct SimulateGraphRequest {
     dt: Option<f64>,
     #[serde(default)]
     chunk_size: Option<usize>,
+    #[serde(default)]
+    sim_time: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3338,6 +3341,9 @@ fn build_continuous_preamble(req: &SimulateGraphRequest) -> String {
     let dt = req.dt.unwrap_or(0.0001);
     preamble.push_str(&format!("define sim_dt_val = {}\n", dt));
 
+    let t0 = req.sim_time.unwrap_or(0.0);
+    preamble.push_str(&format!("define sim_time_val = {}\n", t0));
+
     if let Some(ref a) = req.a_matrix {
         let ns = a.len();
         preamble.push_str(&format!("define sim_ns_val = {}\n", ns));
@@ -3554,6 +3560,9 @@ fn simulate_graph_core(req: SimulateGraphRequest) -> SimulateGraphResponse {
             }
         };
 
+        let dt = req.dt.unwrap_or(0.0001);
+        let mut current_time = req.sim_time.unwrap_or(0.0);
+
         for step in 0..chunk_size {
             let mut new_state = Vec::with_capacity(ns);
             for i in 0..ns {
@@ -3573,6 +3582,7 @@ fn simulate_graph_core(req: SimulateGraphRequest) -> SimulateGraphResponse {
                 }
             }
             state = new_state;
+            current_time += dt;
             history.push(SimulateTimeSample {
                 step,
                 state: state.clone(),
@@ -3580,7 +3590,11 @@ fn simulate_graph_core(req: SimulateGraphRequest) -> SimulateGraphResponse {
             });
 
             if step + 1 < chunk_size {
-                let state_src = build_sim_state_define(&state);
+                let state_src = format!(
+                    "{}define sim_time_val = {}\n",
+                    build_sim_state_define(&state),
+                    current_time
+                );
                 let state_prog = match parse_kleis_program(&state_src) {
                     Ok(p) => p,
                     Err(e) => {
@@ -5738,6 +5752,7 @@ mod simulate_graph_tests {
             inputs: None,
             dt: None,
             chunk_size: None,
+            sim_time: None,
         }
     }
 
@@ -5891,6 +5906,7 @@ mod simulate_graph_tests {
             inputs: None,
             dt: None,
             chunk_size: None,
+            sim_time: None,
         };
         let resp = simulate_graph_core(req);
         assert!(resp.error.is_none(), "error: {:?}", resp.error);
@@ -5950,6 +5966,7 @@ mod simulate_graph_tests {
             inputs: None,
             dt: None,
             chunk_size: None,
+            sim_time: None,
         };
         let resp = simulate_graph_core(req);
         assert!(resp.error.is_none(), "error: {:?}", resp.error);
@@ -6045,6 +6062,7 @@ mod simulate_graph_tests {
             inputs: None,
             dt: None,
             chunk_size: None,
+            sim_time: None,
         }
     }
 
@@ -6370,6 +6388,7 @@ mod continuous_sim_tests {
             inputs: Some(setup.input_values.clone()),
             dt: Some(dt),
             chunk_size: Some(1000),
+            sim_time: None,
         };
 
         let resp = simulate_graph_core(req);
@@ -6768,6 +6787,7 @@ mod continuous_sim_tests {
             inputs: Some(setup.input_values.clone()),
             dt: Some(setup.dt),
             chunk_size: Some(100),
+            sim_time: None,
         };
 
         let resp = simulate_graph_core(req);
@@ -7182,6 +7202,7 @@ mod continuous_sim_tests {
             inputs: Some(setup.input_values.clone()),
             dt: Some(setup.dt),
             chunk_size: Some(100),
+            sim_time: None,
         };
 
         let resp = simulate_graph_core(req);
