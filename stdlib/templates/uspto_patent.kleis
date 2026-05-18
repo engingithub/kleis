@@ -1,0 +1,573 @@
+// =============================================================================
+// USPTO Patent Application Template (Provisional & Non-Provisional)
+// =============================================================================
+//
+// Based on:
+// - USPTO MPEP Chapter 0600: Parts, Form, and Content of Application
+// - 35 U.S.C. § 111(b) Provisional Application
+// - 35 U.S.C. § 112(a) Written Description Requirement
+// - Patent Center: https://patentcenter.uspto.gov
+//
+// USPTO Patent Application Sections (preferred order):
+// 1. Title of the Invention
+// 2. Cross-Reference to Related Applications (optional)
+// 3. Statement Regarding Federally Sponsored Research (optional)
+// 4. Field of the Invention
+// 5. Background of the Invention
+// 6. Summary of the Invention
+// 7. Brief Description of the Drawings
+// 8. Detailed Description of the Preferred Embodiment
+// 9. Claims
+// 10. Abstract of the Disclosure
+// 11. Drawings (separate PDF)
+//
+// =============================================================================
+
+import "stdlib/prelude.kleis"
+
+// =============================================================================
+// Template Metadata
+// =============================================================================
+
+define template_name = "USPTO Patent Application"
+define template_version = "1.0"
+define template_type = "patent"
+
+// =============================================================================
+// Inventor and Assignee Types
+// =============================================================================
+
+data Inventor = Inventor(String, String, String)  // name, city, country
+
+data Assignee = Assignee(String, String)  // entity_name, entity_type ("individual"/"corporation")
+
+// =============================================================================
+// Patent Document Element Types
+// =============================================================================
+
+data PatentElement =
+    PatentSection(String, String)                  // title, content
+  | PatentSubsection(String, String)               // title, content
+  | PatentParagraph(String)                        // numbered paragraph text
+  | PatentEquation(String, String, Bool)           // label, typst_math, numbered
+  | PatentFigure(String, String, String)           // label, caption, typst_code
+  | PatentTable(String, String, String)            // label, caption, typst_table
+  | PatentClaim(ℕ, String, Bool)                   // claim_number, text, is_independent
+  | PatentDrawingRef(String, String)               // figure_id, description
+  | PatentReference(String, String)                // key, citation
+
+// Complete patent application
+data PatentApplication = Patent(
+    String,      // title
+    List,        // inventors (List of Inventor)
+    String,      // assignee_name (empty if individual)
+    String,      // filing_date
+    String,      // application_type ("provisional" / "non-provisional")
+    String,      // cross_references (empty if none)
+    String,      // federal_research (empty if none)
+    String,      // field_of_invention
+    String,      // background
+    String,      // summary
+    List,        // drawing_refs (List of PatentDrawingRef)
+    List,        // elements (detailed description, figures, tables, equations)
+    List,        // claims (List of PatentClaim)
+    String       // abstract_text (max 150 words per USPTO)
+)
+
+// =============================================================================
+// Document Construction
+// =============================================================================
+
+define patent_application(title, inventors, assignee, filing_date, app_type,
+                          cross_refs, federal, field, background, summary,
+                          drawing_refs, elements, claims, abstract_text) =
+    Patent(title, inventors, assignee, filing_date, app_type,
+           cross_refs, federal, field, background, summary,
+           drawing_refs, elements, claims, abstract_text)
+
+define patent_provisional(title, inventors, field, background, summary,
+                          drawing_refs, elements, claims, abstract_text) =
+    Patent(title, inventors, "", "", "provisional",
+           "", "", field, background, summary,
+           drawing_refs, elements, claims, abstract_text)
+
+// =============================================================================
+// Validation Functions
+// =============================================================================
+
+define valid_patent(patent) = match patent {
+    Patent(title, inventors, assignee, date, app_type, cross_refs, federal,
+           field, background, summary, drawing_refs, elements, claims, abstract_text) =>
+        if eq(strlen(title), 0) then false
+        else if eq(length(inventors), 0) then false
+        else if eq(strlen(field), 0) then false
+        else if eq(strlen(background), 0) then false
+        else if eq(strlen(summary), 0) then false
+        else if eq(strlen(abstract_text), 0) then false
+        else true
+}
+
+// =============================================================================
+// Typst Styling — USPTO Patent Format
+// =============================================================================
+
+// Page: US Letter, margins per 37 CFR 1.52 (left >= 1in, others >= 3/4in)
+// Page numbers: consecutive Arabic, centrally located (bottom center)
+define typst_patent_page_setup =
+"#set page(
+  paper: \"us-letter\",
+  margin: (top: 1in, bottom: 1in, left: 1in, right: 0.75in),
+  numbering: \"1\",
+  header: none,
+  footer: context align(center)[
+    #text(font: \"Times New Roman\", size: 12pt)[#counter(page).display()]
+  ],
+)
+"
+
+// Font: non-script, 12pt per 37 CFR 1.52(b)(2)(ii)
+// Acceptable: Arial, Times New Roman, Courier
+define typst_patent_text_setup =
+"#set text(
+  font: \"Times New Roman\",
+  size: 12pt,
+  lang: \"en\",
+)
+"
+
+// Line spacing: 1.5 or double-spaced per 37 CFR 1.52(b)(2)(iv)
+// Single column of text per 37 CFR 1.52(b)(2)(v)
+define typst_patent_paragraph_setup =
+"#set par(
+  justify: true,
+  leading: 2em,
+  first-line-indent: 0.5in,
+)
+
+// No indent after headings
+#show heading: it => {
+  it
+  par(text(size: 0pt, \"\"))
+}
+"
+
+// Patent section headings: bold, centered, uppercase per USPTO convention
+define typst_patent_heading_setup =
+"#set heading(numbering: none)
+
+#show heading.where(level: 1): it => {
+  v(1.5em)
+  align(center)[
+    #text(size: 12pt, weight: \"bold\")[#upper(it.body)]
+  ]
+  v(1em)
+}
+
+#show heading.where(level: 2): it => {
+  v(1em)
+  text(size: 12pt, weight: \"bold\")[#it.body]
+  v(0.5em)
+}
+
+#show heading.where(level: 3): it => {
+  v(0.8em)
+  text(size: 12pt, weight: \"bold\", style: \"italic\")[#it.body]
+  v(0.4em)
+}
+"
+
+define typst_patent_figure_setup =
+"#set figure(placement: auto)
+#show figure.caption: it => {
+  text(size: 10pt)[#it]
+}
+"
+
+define typst_patent_preamble = concat(
+    concat(concat(concat(
+        typst_patent_page_setup,
+        typst_patent_text_setup),
+        typst_patent_paragraph_setup),
+        typst_patent_heading_setup),
+    typst_patent_figure_setup)
+
+// =============================================================================
+// Title Page Template
+// =============================================================================
+
+define typst_patent_title_page =
+"#page(numbering: none, header: none, footer: none)[
+  #v(2in)
+  #align(center)[
+    #text(size: 12pt, tracking: 0.1em)[UNITED STATES PATENT APPLICATION]
+    #v(0.3in)
+    #text(size: 12pt)[APPLICATION_TYPE]
+    #v(1in)
+    #text(size: 14pt, weight: \"bold\")[TITLE]
+    #v(1in)
+    #text(size: 12pt)[INVENTOR_BLOCK]
+    #v(1fr)
+    #text(size: 12pt, fill: luma(100))[FILING_DATE]
+  ]
+]
+"
+
+// =============================================================================
+// Compilation Helper Functions
+// =============================================================================
+
+define format_inventor(inv) = match inv {
+    Inventor(name, city, country) =>
+        concat(concat(concat(name, ", "), city), concat(", ", country))
+}
+
+define format_inventors_acc(inventors, acc) =
+    if eq(length(inventors), 0) then acc
+    else
+        let inv_str = format_inventor(head(inventors)) in
+        let new_acc = if eq(strlen(acc), 0) then inv_str
+                      else concat(concat(acc, " #linebreak()\n    "), inv_str) in
+        format_inventors_acc(tail(inventors), new_acc)
+
+define format_inventors(inventors) = format_inventors_acc(inventors, "")
+
+define substitute_patent_title(template, title, inventors, app_type, filing_date) =
+    let t1 = replaceAll(template, "TITLE", title) in
+    let t2 = replaceAll(t1, "INVENTOR_BLOCK", format_inventors(inventors)) in
+    let t3 = replaceAll(t2, "APPLICATION_TYPE",
+        if eq(app_type, "provisional") then "Provisional Application under 35 U.S.C. § 111(b)"
+        else "Non-Provisional Application under 35 U.S.C. § 111(a)") in
+    replaceAll(t3, "FILING_DATE", filing_date)
+
+// =============================================================================
+// Element Compilation Functions
+// =============================================================================
+
+define is_patent_claim(elem) = match elem {
+    PatentClaim(n, text, indep) => true
+  | PatentSection(t, c) => false
+  | PatentSubsection(t, c) => false
+  | PatentParagraph(t) => false
+  | PatentEquation(l, m, n) => false
+  | PatentFigure(l, c, code) => false
+  | PatentTable(l, c, code) => false
+  | PatentDrawingRef(f, d) => false
+  | PatentReference(k, c) => false
+}
+
+define is_patent_reference(elem) = match elem {
+    PatentReference(k, c) => true
+  | PatentClaim(n, text, indep) => false
+  | PatentSection(t, c) => false
+  | PatentSubsection(t, c) => false
+  | PatentParagraph(t) => false
+  | PatentEquation(l, m, n) => false
+  | PatentFigure(l, c, code) => false
+  | PatentTable(l, c, code) => false
+  | PatentDrawingRef(f, d) => false
+}
+
+define compile_patent_element(elem) = match elem {
+    PatentSection(title, content) =>
+        concat(concat(concat("= ", title), "\n\n"), content)
+  | PatentSubsection(title, content) =>
+        concat(concat(concat("== ", title), "\n\n"), content)
+  | PatentParagraph(text) =>
+        text
+  | PatentEquation(label, typst_math, numbered) =>
+        if numbered then
+            concat(concat(concat("\n$ ", typst_math), " $ <"), concat(label, ">\n"))
+        else
+            concat(concat("\n$ ", typst_math), " $\n")
+  | PatentFigure(label, caption, code) =>
+        concat(concat(concat("\n#figure(\n  ", code), ",\n  caption: ["), concat(concat(caption, "]\n) <"), concat(label, ">\n")))
+  | PatentTable(label, caption, table_code) =>
+        concat(concat(concat("\n#figure(\n  ", table_code), ",\n  caption: ["), concat(concat(caption, "]\n) <"), concat(label, ">\n")))
+  | PatentClaim(n, text, indep) => ""
+  | PatentDrawingRef(fig_id, desc) =>
+        concat(concat("*", fig_id), concat(":* ", desc))
+  | PatentReference(key, citation) =>
+        concat(concat(concat("#par(hanging-indent: 1.5em)[\\[", key), "\\] "), concat(citation, "]"))
+}
+
+// Compile body elements (excluding claims and references)
+define compile_patent_body_acc(xs, acc) =
+    if eq(length(xs), 0) then acc
+    else
+        let elem = head(xs) in
+        if is_patent_claim(elem) then compile_patent_body_acc(tail(xs), acc)
+        else if is_patent_reference(elem) then compile_patent_body_acc(tail(xs), acc)
+        else
+            let elem_typst = compile_patent_element(elem) in
+            let new_acc = if eq(strlen(acc), 0) then elem_typst
+                          else concat(concat(acc, "\n\n"), elem_typst) in
+            compile_patent_body_acc(tail(xs), new_acc)
+
+define compile_patent_body(xs) = compile_patent_body_acc(xs, "")
+
+// Compile references
+define compile_patent_references_acc(xs, acc) =
+    if eq(length(xs), 0) then acc
+    else
+        let elem = head(xs) in
+        if is_patent_reference(elem) then
+            let elem_typst = compile_patent_element(elem) in
+            let new_acc = if eq(strlen(acc), 0) then elem_typst
+                          else concat(concat(acc, "\n\n"), elem_typst) in
+            compile_patent_references_acc(tail(xs), new_acc)
+        else
+            compile_patent_references_acc(tail(xs), acc)
+
+define compile_patent_references(xs) = compile_patent_references_acc(xs, "")
+
+define has_patent_references_acc(xs) =
+    if eq(length(xs), 0) then false
+    else if is_patent_reference(head(xs)) then true
+    else has_patent_references_acc(tail(xs))
+
+define has_patent_references(xs) = has_patent_references_acc(xs)
+
+// =============================================================================
+// Claims Compilation
+// =============================================================================
+
+define compile_claim(c) = match c {
+    PatentClaim(num, text, is_independent) =>
+        if is_independent then
+            concat(concat("#block(spacing: 1em)[*", intToStr(num)),
+                   concat(". ", concat(text, "*]")))
+        else
+            concat(concat("#block(spacing: 1em)[", intToStr(num)),
+                   concat(". ", concat(text, "]")))
+  | PatentSection(t, c) => ""
+  | PatentSubsection(t, c) => ""
+  | PatentParagraph(t) => ""
+  | PatentEquation(l, m, n) => ""
+  | PatentFigure(l, c, code) => ""
+  | PatentTable(l, c, code) => ""
+  | PatentDrawingRef(f, d) => ""
+  | PatentReference(k, c) => ""
+}
+
+define compile_claims_acc(claims, acc) =
+    if eq(length(claims), 0) then acc
+    else
+        let claim_typst = compile_claim(head(claims)) in
+        let new_acc = if eq(strlen(acc), 0) then claim_typst
+                      else concat(concat(acc, "\n\n"), claim_typst) in
+        compile_claims_acc(tail(claims), new_acc)
+
+define compile_claims(claims) = compile_claims_acc(claims, "")
+
+// =============================================================================
+// Drawing References Compilation
+// =============================================================================
+
+define compile_drawing_ref(dr) = match dr {
+    PatentDrawingRef(fig_id, desc) =>
+        concat(concat("*", fig_id), concat(":* ", desc))
+  | PatentSection(t, c) => ""
+  | PatentSubsection(t, c) => ""
+  | PatentParagraph(t) => ""
+  | PatentEquation(l, m, n) => ""
+  | PatentFigure(l, c, code) => ""
+  | PatentTable(l, c, code) => ""
+  | PatentClaim(n, text, indep) => ""
+  | PatentReference(k, c) => ""
+}
+
+define compile_drawing_refs_acc(refs, acc) =
+    if eq(length(refs), 0) then acc
+    else
+        let ref_typst = compile_drawing_ref(head(refs)) in
+        let new_acc = if eq(strlen(acc), 0) then ref_typst
+                      else concat(concat(acc, "\n\n"), ref_typst) in
+        compile_drawing_refs_acc(tail(refs), new_acc)
+
+define compile_drawing_refs(refs) = compile_drawing_refs_acc(refs, "")
+
+// =============================================================================
+// Cover Sheet (PTO/SB/16) — Required for Provisional Applications
+// =============================================================================
+
+define typst_patent_cover_sheet =
+"#page(numbering: none, header: none, footer: none)[
+  #align(center)[
+    #text(size: 14pt, weight: \"bold\")[PROVISIONAL APPLICATION COVER SHEET]
+    #v(0.2in)
+    #text(size: 10pt)[(Pursuant to 35 U.S.C. § 111(b) and 37 CFR 1.53(c))]
+    #v(0.2in)
+    #text(size: 10pt)[Form PTO/SB/16]
+  ]
+  #v(0.5in)
+
+  #set text(size: 12pt)
+  #table(
+    columns: (1.5in, 1fr),
+    stroke: 0.5pt,
+    inset: 8pt,
+    [*Application Type:*], [Provisional Application for Patent],
+    [*Title of Invention:*], [TITLE],
+    [*Inventor(s):*], [INVENTOR_BLOCK],
+    [*Correspondence Address:*], [CORRESPONDENCE_ADDRESS],
+    [*Docket Number:*], [DOCKET_NUMBER],
+    [*Entity Status:*], [ENTITY_STATUS],
+    [*Government Interest:*], [GOVERNMENT_INTEREST],
+  )
+
+  #v(0.5in)
+  #text(size: 10pt, style: \"italic\")[
+    This application is being filed as a provisional application under 35 U.S.C. § 111(b).
+    No oath, declaration, or formal patent claims are required.
+    No information disclosure statement is included, as provisional applications are not examined.
+  ]
+]
+"
+
+define format_inventor_with_residence(inv) = match inv {
+    Inventor(name, city, country) =>
+        concat(concat(name, " — "), concat(concat(city, ", "), country))
+}
+
+define format_inventors_residence_acc(inventors, acc) =
+    if eq(length(inventors), 0) then acc
+    else
+        let inv_str = format_inventor_with_residence(head(inventors)) in
+        let new_acc = if eq(strlen(acc), 0) then inv_str
+                      else concat(concat(acc, " #linebreak()\n    "), inv_str) in
+        format_inventors_residence_acc(tail(inventors), new_acc)
+
+define format_inventors_residence(inventors) = format_inventors_residence_acc(inventors, "")
+
+define substitute_cover_sheet(template, title, inventors) =
+    let t1 = replaceAll(template, "TITLE", title) in
+    let t2 = replaceAll(t1, "INVENTOR_BLOCK", format_inventors_residence(inventors)) in
+    let t3 = replaceAll(t2, "CORRESPONDENCE_ADDRESS", format_inventors_residence(inventors)) in
+    let t4 = replaceAll(t3, "DOCKET_NUMBER", "[To be assigned]") in
+    let t5 = replaceAll(t4, "ENTITY_STATUS", "Micro Entity (37 CFR 1.29)") in
+    replaceAll(t5, "GOVERNMENT_INTEREST", "None")
+
+// =============================================================================
+// Main Compilation Function
+// =============================================================================
+
+define compile_patent(patent) = match patent {
+    Patent(title, inventors, assignee, filing_date, app_type, cross_refs, federal,
+           field, background, summary, drawing_refs, elements, claims, abstract_text) =>
+        let is_provisional = eq(app_type, "provisional") in
+        let preamble = typst_patent_preamble in
+
+        // Cover sheet (required for provisional per PTO/SB/16)
+        let cover_sheet = if is_provisional then
+            substitute_cover_sheet(typst_patent_cover_sheet, title, inventors)
+            else "" in
+
+        // Title page
+        let title_page = substitute_patent_title(typst_patent_title_page, title, inventors, app_type, filing_date) in
+
+        // Cross-references (optional; typically N/A for provisionals)
+        let cross_ref_section = if eq(strlen(cross_refs), 0) then ""
+            else concat("= Cross-Reference to Related Applications\n\n", cross_refs) in
+
+        // Federal research statement (optional)
+        let federal_section = if eq(strlen(federal), 0) then ""
+            else concat("= Statement Regarding Federally Sponsored Research\n\n", federal) in
+
+        // Field of the invention
+        let field_section = concat("= Field of the Invention\n\n", field) in
+
+        // Background
+        let background_section = concat("= Background of the Invention\n\n", background) in
+
+        // Summary
+        let summary_section = concat("= Summary of the Invention\n\n", summary) in
+
+        // Brief description of drawings
+        let drawings_section = if eq(length(drawing_refs), 0) then ""
+            else concat("= Brief Description of the Drawings\n\n", compile_drawing_refs(drawing_refs)) in
+
+        // Detailed description (body elements)
+        let detailed_section = concat("= Detailed Description of the Preferred Embodiment\n\n",
+            compile_patent_body(elements)) in
+
+        // Claims — optional for provisionals, required for non-provisionals
+        let claims_section = if eq(length(claims), 0) then ""
+            else if is_provisional then
+                concat(
+                    "#pagebreak()\n= Claims\n\n#text(style: \"italic\")[Note: Formal claims are not required for provisional applications under 35 U.S.C. § 111(b). The following claims are included to define the intended scope of protection for the subsequent nonprovisional filing.]\n\n#text(style: \"italic\")[What is claimed is:]\n\n",
+                    compile_claims(claims))
+            else
+                concat(
+                    "#pagebreak()\n= Claims\n\n#text(style: \"italic\")[What is claimed is:]\n\n",
+                    compile_claims(claims)) in
+
+        // Abstract (separate page, single paragraph, max 150 words)
+        let abstract_section = concat(
+            "#pagebreak()\n= Abstract of the Disclosure\n\n",
+            abstract_text) in
+
+        // References Cited — EXCLUDED for provisionals per USPTO rules
+        // (No information disclosure statement in provisional applications)
+        let refs_section = if is_provisional then ""
+            else if has_patent_references(elements) then
+                concat("\n\n= References Cited\n\n",
+                       compile_patent_references(elements))
+            else "" in
+
+        // Assemble all parts
+        concat(preamble,
+        concat("\n\n", concat(cover_sheet,
+        concat("\n\n", concat(title_page,
+        concat("\n\n", concat(cross_ref_section,
+        concat("\n\n", concat(federal_section,
+        concat("\n\n", concat(field_section,
+        concat("\n\n", concat(background_section,
+        concat("\n\n", concat(summary_section,
+        concat("\n\n", concat(drawings_section,
+        concat("\n\n", concat(detailed_section,
+        concat("\n\n", concat(refs_section,
+        concat("\n\n", concat(claims_section,
+        concat("\n\n", abstract_section))))))))))))))))))))))))
+}
+
+// =============================================================================
+// Examples
+// =============================================================================
+
+example "test_patent_inventor_formatting" {
+    let inventors = [Inventor("John Doe", "San Francisco", "US")] in
+    let formatted = format_inventors(inventors) in
+    out(formatted)
+}
+
+example "test_patent_validation" {
+    let patent = patent_provisional(
+        "A Novel Method",
+        [Inventor("Jane Doe", "Boston", "US")],
+        "Computer science.",
+        "Prior art is limited.",
+        "The invention improves upon...",
+        Nil,
+        Cons(PatentSection("Overall Architecture", "The system comprises..."), Nil),
+        Cons(PatentClaim(1, "A method comprising...", true), Nil),
+        "A method for improving X by doing Y."
+    ) in
+    assert(valid_patent(patent) = true)
+    out("Patent validation works")
+}
+
+example "test_patent_compile" {
+    let patent = patent_provisional(
+        "Sample Invention",
+        [Inventor("Test Inventor", "Test City", "US")],
+        "Test field.",
+        "Test background.",
+        "Test summary.",
+        [PatentDrawingRef("FIG. 1", "System architecture overview")],
+        [PatentSection("System Overview", "The system includes...")],
+        [PatentClaim(1, "A computer-implemented method comprising the step of processing data.", true)],
+        "A method for processing data efficiently."
+    ) in
+    let typst = compile_patent(patent) in
+    out(typst)
+}

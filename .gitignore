@@ -17,6 +17,9 @@ tmp_*.tex
 # html_gallery.html
 # template_coverage_report.html
 
+# Patent applications (confidential)
+/patent/
+
 # Private planning and strategy documents
 /funding/
 /private/
