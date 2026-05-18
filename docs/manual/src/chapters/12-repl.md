@@ -7,7 +7,7 @@ The REPL (Read-Eval-Print Loop) is an interactive environment for experimenting 
 ```bash
 $ cargo run --bin repl
 
-🧮 Kleis REPL v0.1.0
+🧮 Kleis REPL v1.0.0
    Type :help for commands, :quit to exit
 
 λ>

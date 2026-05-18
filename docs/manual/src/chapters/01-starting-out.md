@@ -17,7 +17,7 @@ The easiest way to experiment with Kleis is the **REPL** (Read-Eval-Print Loop):
 
 ```bash
 $ cargo run --bin repl
-🧮 Kleis REPL v0.1.0
+🧮 Kleis REPL v1.0.0
    Type :help for commands, :quit to exit
 
 λ> 2 + 2

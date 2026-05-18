@@ -316,6 +316,8 @@ User Code (Kleis Expression)
 The core abstraction is defined in `src/solvers/backend.rs`:
 
 ```rust
+// Simplified — the full trait (src/solvers/backend.rs) has 16 methods
+// including scope management, structure loading, and function definition.
 pub trait SolverBackend {
     /// Get solver name (e.g., "Z3", "CVC5")
     fn name(&self) -> &str;
@@ -343,7 +345,8 @@ pub trait SolverBackend {
     fn are_equivalent(&mut self, e1: &Expression, e2: &Expression) 
         -> Result<bool, String>;
 
-    // ... additional methods for scope management, assertions, etc.
+    // ... plus: load_structure_axioms, check_consistency, push, pop,
+    //     reset, load_identity_element, assert_expression, define_function
 }
 ```
 

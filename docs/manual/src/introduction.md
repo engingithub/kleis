@@ -13,8 +13,8 @@ Kleis is a **structure-oriented mathematical formalization language** with Z3 ve
 | Metric | Value |
 |--------|-------|
 | Grammar | Fully implemented |
-| Tests | 1,762 Rust unit tests |
-| Examples | 71 Kleis files across 15+ domains |
+| Tests | 2,490 Rust unit tests |
+| Examples | 223 Kleis files across 38 domains |
 | Built-in Functions | 100+ (including LAPACK numerical operations) |
 
 ### Core Capabilities
@@ -41,6 +41,11 @@ Kleis has been used to formalize:
 | **Protocols** | IPv4 packets, IP routing, stop-and-wait ARQ |
 | **Authorization** | OAuth2 scopes, Google Zanzibar |
 | **Formal Methods** | Petri nets, mutex verification |
+| **Hardware** | ALU verification, bitvector arithmetic |
+| **Electronics** | Circuit schematics, multivibrators, rectifiers |
+| **Music** | Sheet music generation, LilyPond engraving |
+| **Linguistics** | Middle Egyptian hieroglyphs, disambiguation |
+| **Business** | Order-to-cash workflows, process verification |
 | **Games** | Chess, Contract Bridge, Sudoku |
 
 ## Who is This For?

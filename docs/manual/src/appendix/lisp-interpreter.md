@@ -14,7 +14,7 @@ The interpreter includes:
 
 ```
 $ cargo run --bin repl
-🧮 Kleis REPL v0.1.0
+🧮 Kleis REPL v1.0.0
 
 λ> :load examples/meta-programming/lisp_parser.kleis
 ✅ Loaded: 2 files, 60 functions, 15 structures, 5 data types

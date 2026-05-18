@@ -7,8 +7,8 @@
 | Metric | Value |
 |--------|-------|
 | **Grammar** | Fully implemented |
-| **Tests** | 1,762 Rust unit tests |
-| **Examples** | 71 Kleis files across 15+ domains |
+| **Tests** | 2,490 Rust unit tests |
+| **Examples** | 223 Kleis files across 38 domains |
 | **Built-in Functions** | 100+ (including LAPACK numerical operations) |
 | **Tooling** | REPL, Jupyter kernel, VS Code extension, DAP debugger |
 | **Turing Complete** | Yes — proven via LISP interpreter in Kleis |
@@ -93,7 +93,7 @@ Output:
 ### Run Tests
 
 ```bash
-cargo test           # All 1,762 tests
+cargo test           # All 2,490 tests
 cargo test --lib     # Library tests only
 ```
 
@@ -253,12 +253,12 @@ kleis/
 │   ├── ontology/           # Projected Ontology Theory
 │   ├── control/            # Control systems
 │   ├── number-theory/      # FLT exploration
-│   └── ...                 # 15+ domains
+│   └── ...                 # 38 domains
 ├── kleis-notebook/         # Jupyter kernel
 ├── docs/                   # Documentation
 │   ├── manual/             # The Kleis Manual (mdBook)
 │   └── adr/                # Architecture Decision Records
-└── tests/                  # 1,762 tests
+└── tests/                  # 2,490 tests
 ```
 
 ---
@@ -309,7 +309,7 @@ This approach enables:
 ```bash
 cargo fmt --all                                    # Format code
 cargo clippy --all-targets --all-features          # Lint
-cargo test                                         # Run all 1,762 tests
+cargo test                                         # Run all 2,490 tests
 ```
 
 ### Add a New Built-in

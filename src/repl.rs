@@ -33,7 +33,7 @@ use crate::type_inference::TypeInference;
 #[cfg(feature = "axiom-verification")]
 use crate::axiom_verifier::{AxiomVerifier, VerificationResult};
 
-const VERSION: &str = "0.1.0";
+const VERSION: &str = "1.0.0";
 
 /// Run the REPL (standalone mode, creates its own context)
 pub fn run_repl() -> Result<(), String> {
