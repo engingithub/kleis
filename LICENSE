@@ -1,17 +1,58 @@
 Copyright (c) 2024-2026 Engin Atik. All Rights Reserved.
 
-No part of this software, including but not limited to the source code,
-documentation, standard library, theory files, research papers, and
-associated materials (collectively, the "Software"), may be used, copied,
-modified, merged, published, distributed, sublicensed, or sold without
-the express prior written permission of the copyright holder.
+GRANT OF NON-COMMERCIAL LICENSE
 
-The Software is provided "as is", without warranty of any kind, express or
-implied, including but not limited to the warranties of merchantability,
-fitness for a particular purpose, and noninfringement. In no event shall the
-copyright holder be liable for any claim, damages, or other liability,
-whether in an action of contract, tort, or otherwise, arising from, out of,
-or in connection with the Software or the use or other dealings in the
-Software.
+Permission is hereby granted, free of charge, to any person obtaining a
+copy of this software, including the source code, documentation, standard
+library, theory files, and associated materials (collectively, the
+"Software"), to use, copy, and modify the Software for non-commercial
+purposes only, including education, academic research, and personal
+projects, subject to the following conditions:
 
-For licensing inquiries, contact: https://kleis.io
+1. The above copyright notice and this license shall be included in all
+   copies or substantial portions of the Software.
+
+2. The Software, or any derivative work thereof, shall not be used for
+   commercial purposes --- including but not limited to sale, licensing,
+   incorporation into commercial products or services, or use in a
+   production environment generating revenue --- without the express prior
+   written permission of the copyright holder.
+
+3. Redistribution of the Software, with or without modification, is
+   permitted only for non-commercial purposes and must retain this license
+   in its entirety.
+
+PATENT NOTICE
+
+The methods, systems, and architectures implemented in this Software are
+the subject of the following United States provisional patent applications,
+all filed by the inventor Engin Atik:
+
+  - Application No. 64/067,942: "System and Method for Topologically-Driven
+    Sparse Matrix Compilation and Multi-Engine Cyber-Physical Verification"
+
+  - Application No. 64/067,962: "System and Method for Domain-Agnostic
+    Graph Compilation Using Declarative Theory Contracts, Port-Level
+    Incidence Encoding, and Split-Protocol Multi-Engine Simulation"
+
+  - Application No. 64/067,977: "System and Method for Automatic Generation
+    of Domain-Extensible Structural Editors from Declarative Multi-Target
+    Template Specifications"
+
+Use of the Software under this non-commercial license does not grant any
+license under these patents. Commercial use of the patented methods ---
+whether using this Software or an independent implementation --- requires
+a separate patent license from the patent holder.
+
+DISCLAIMER
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL
+THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF,
+OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+For commercial licensing and patent licensing inquiries, contact:
+atik@kleis.io | https://kleis.io
