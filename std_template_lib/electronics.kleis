@@ -38,6 +38,17 @@ operation TYPE_VoltageSource : ℤ
 operation TYPE_ACVoltageSource : ℤ
 operation TYPE_CurrentSource : ℤ
 operation TYPE_Ground : ℤ
+operation TYPE_Potentiometer : ℤ
+operation TYPE_Switch : ℤ
+operation TYPE_Buzzer : ℤ
+operation TYPE_Photoresistor : ℤ
+operation TYPE_Photodiode : ℤ
+operation TYPE_Fuse : ℤ
+operation TYPE_Transformer : ℤ
+operation TYPE_VCVS : ℤ
+operation TYPE_VCCS : ℤ
+operation TYPE_CCVS : ℤ
+operation TYPE_CCCS : ℤ
 operation TYPE_Connector : ℤ
 operation TYPE_Measurement : ℤ
 
@@ -59,20 +70,32 @@ define is_ac_vsource(c) = graph_ctype(c) = TYPE_ACVoltageSource
 define is_voltage_source(c) = is_dc_vsource(c) ∨ is_ac_vsource(c)
 define is_current_source(c) = graph_ctype(c) = TYPE_CurrentSource
 define is_ground(c) = graph_ctype(c) = TYPE_Ground
+define is_potentiometer(c) = graph_ctype(c) = TYPE_Potentiometer
+define is_switch(c) = graph_ctype(c) = TYPE_Switch
+define is_buzzer(c) = graph_ctype(c) = TYPE_Buzzer
+define is_photoresistor(c) = graph_ctype(c) = TYPE_Photoresistor
+define is_photodiode(c) = graph_ctype(c) = TYPE_Photodiode
+define is_fuse(c) = graph_ctype(c) = TYPE_Fuse
+define is_transformer(c) = graph_ctype(c) = TYPE_Transformer
+define is_vcvs(c) = graph_ctype(c) = TYPE_VCVS
+define is_vccs(c) = graph_ctype(c) = TYPE_VCCS
+define is_ccvs(c) = graph_ctype(c) = TYPE_CCVS
+define is_cccs(c) = graph_ctype(c) = TYPE_CCCS
 define is_connector(c) = graph_ctype(c) = TYPE_Connector
 define is_measurement(c) = graph_ctype(c) = TYPE_Measurement
 
 // Grouped predicates for verification
-define is_passive(c) = is_resistor(c) ∨ is_capacitor(c) ∨ is_inductor(c)
-define is_nonlinear(c) = is_diode(c) ∨ is_led(c) ∨ is_zener(c)
+define is_passive(c) = is_resistor(c) ∨ is_capacitor(c) ∨ is_inductor(c) ∨ is_potentiometer(c) ∨ is_buzzer(c) ∨ is_photoresistor(c) ∨ is_fuse(c)
+define is_nonlinear(c) = is_diode(c) ∨ is_led(c) ∨ is_zener(c) ∨ is_photodiode(c)
 define is_transistor(c) = is_npn(c) ∨ is_pnp(c) ∨ is_nmos(c) ∨ is_pmos(c)
 define is_active(c) = is_transistor(c) ∨ is_opamp(c)
+define is_dependent_source(c) = is_vcvs(c) ∨ is_vccs(c) ∨ is_ccvs(c) ∨ is_cccs(c)
 define is_source(c) = is_voltage_source(c) ∨ is_current_source(c)
-define is_load(c) = is_passive(c) ∨ is_nonlinear(c) ∨ is_active(c)
-define is_storage(c) = is_capacitor(c) ∨ is_inductor(c)
+define is_load(c) = is_passive(c) ∨ is_nonlinear(c) ∨ is_active(c) ∨ is_dependent_source(c) ∨ is_switch(c)
+define is_storage(c) = is_capacitor(c) ∨ is_inductor(c) ∨ is_transformer(c)
 
 // Voltage-dependent Jacobian: components whose J stamp changes with node voltages
-define is_vdep_jacobian(c) = is_diode(c) ∨ is_led(c) ∨ is_zener(c) ∨ is_npn(c) ∨ is_pnp(c) ∨ is_nmos(c) ∨ is_pmos(c)
+define is_vdep_jacobian(c) = is_diode(c) ∨ is_led(c) ∨ is_zener(c) ∨ is_npn(c) ∨ is_pnp(c) ∨ is_nmos(c) ∨ is_pmos(c) ∨ is_photodiode(c)
 
 // =============================================================================
 // Structural verification — checked by Z3
@@ -128,11 +151,24 @@ example "NO SERIES CURRENT SOURCES: no two current sources on the same net" {
 //   NMOS/PMOS:      param(c, 0) = Kn/Kp, param(c, 1) = Vth
 //   VoltageSource:  param(c, 0) = V
 //   CurrentSource:  param(c, 0) = I
+//   Potentiometer:  param(c, 0) = R,  param(c, 1) = wiper (0..1)
+//   Switch:         param(c, 0) = closed (1=on, 0=off)
+//   Buzzer:         param(c, 0) = R
+//   Photoresistor:  param(c, 0) = R_dark, param(c, 1) = R_light, param(c, 2) = light (0..1)
+//   Photodiode:     param(c, 0) = Is, param(c, 1) = Iph, param(c, 2) = light (0..1)
+//   Fuse:           param(c, 0) = R
+//   Transformer:    param(c, 0) = L1, param(c, 1) = L2, param(c, 2) = k,
+//                   param(c, 3) = initial1, param(c, 4) = initial2
+//   VCVS:           param(c, 0) = gain (Av)
+//   VCCS:           param(c, 0) = gm (transconductance)
+//   CCVS:           param(c, 0) = rm (transresistance)
+//   CCCS:           param(c, 0) = gain (Ai)
 // =============================================================================
 
 // Count storage elements (state variables: C and L)
 define sim_count_states_from(c) =
     if c < 0 then 0
+    else if is_transformer(c) then 2 + sim_count_states_from(c - 1)
     else if is_storage(c) then 1 + sim_count_states_from(c - 1)
     else sim_count_states_from(c - 1)
 
@@ -149,6 +185,7 @@ define sim_input_count = sim_count_inputs_from(graph_nc_val - 1)
 // Map state index to component index (find the i-th storage element)
 define sim_state_idx_from(c) =
     if c < 0 then 0
+    else if is_transformer(c) then 2 + sim_state_idx_from(c - 1)
     else if is_storage(c) then 1 + sim_state_idx_from(c - 1)
     else sim_state_idx_from(c - 1)
 
@@ -223,6 +260,23 @@ define term_source(c) = graph_port_net_val(graph_comp_port0_val(c) + 2)
 define term_inv(c) = graph_port_net_val(graph_comp_port0_val(c))
 define term_noninv(c) = graph_port_net_val(graph_comp_port0_val(c) + 1)
 define term_out(c) = graph_port_net_val(graph_comp_port0_val(c) + 2)
+
+// 3-port terminals (Potentiometer: left, right, wiper per .kleist port order)
+define term_pot_left(c) = graph_port_net_val(graph_comp_port0_val(c))
+define term_pot_right(c) = graph_port_net_val(graph_comp_port0_val(c) + 1)
+define term_pot_wiper(c) = graph_port_net_val(graph_comp_port0_val(c) + 2)
+
+// 4-port terminals (Transformer: pri_pos, pri_neg, sec_pos, sec_neg)
+define term_pri_pos(c) = graph_port_net_val(graph_comp_port0_val(c))
+define term_pri_neg(c) = graph_port_net_val(graph_comp_port0_val(c) + 1)
+define term_sec_pos(c) = graph_port_net_val(graph_comp_port0_val(c) + 2)
+define term_sec_neg(c) = graph_port_net_val(graph_comp_port0_val(c) + 3)
+
+// 4-port terminals (Dependent sources: ctrl_pos, ctrl_neg, out_pos, out_neg)
+define term_ctrl_pos(c) = graph_port_net_val(graph_comp_port0_val(c))
+define term_ctrl_neg(c) = graph_port_net_val(graph_comp_port0_val(c) + 1)
+define term_out_pos(c) = graph_port_net_val(graph_comp_port0_val(c) + 2)
+define term_out_neg(c) = graph_port_net_val(graph_comp_port0_val(c) + 3)
 
 // Reverse lookup: state index for a given component
 define state_index_search(c, k) =
@@ -333,113 +387,10 @@ define pmos_gds(Vsg, Vsd, Kp, Vth_abs) =
     else 0
 
 // =============================================================================
-// MNA Jacobian stamping — each component stamps into J[n][m]
+// MNA Jacobian stamping — sparse entry-list form
 // =============================================================================
 
-// 2-port Jacobian stamp: symmetric ±g pattern
-define stamp_2port_J(np, nm_, g, n, m) =
-    if n = np then
-        if m = np then g else if m = nm_ then 0 - g else 0
-    else if n = nm_ then
-        if m = np then 0 - g else if m = nm_ then g else 0
-    else 0
 
-define stamp_J_resistor(c, n, m, v) =
-    stamp_2port_J(term_pos(c), term_neg(c), 1 / graph_param_val(c, 0), n, m)
-
-define stamp_J_capacitor(c, n, m, v) =
-    stamp_2port_J(term_pos(c), term_neg(c), graph_param_val(c, 0) / sim_dt_val, n, m)
-
-define stamp_J_diode(c, n, m, v) =
-    let np = term_pos(c) in let nm_ = term_neg(c) in
-    let vd = nth(v, np) - nth(v, nm_) in
-    let gd = diode_conductance(vd, graph_param_val(c, 0), graph_param_val(c, 1), graph_param_val(c, 2)) in
-    stamp_2port_J(np, nm_, gd, n, m)
-
-define stamp_J_vsource(c, n, m, v) =
-    stamp_2port_J(term_pos(c), term_neg(c), 1e12, n, m)
-
-define stamp_J_ground(c, n, m, v) =
-    let ng = sim_connected_net(c) in
-    if n = ng then (if m = ng then 1e12 else 0) else 0
-
-define stamp_J_inductor(c, n, m, v) =
-    stamp_2port_J(term_pos(c), term_neg(c), sim_dt_val / graph_param_val(c, 0), n, m)
-
-// NPN BJT Jacobian: KCL at base, collector, emitter nodes.
-// Vbe = V[base] - V[emitter]; gbe and gm are the small-signal conductances.
-define stamp_J_npn(c, n, m, v) =
-    let nb = term_base(c) in let nc_ = term_coll(c) in let ne = term_emit(c) in
-    let vbe = nth(v, nb) - nth(v, ne) in
-    let gbe = bjt_gbe(vbe, graph_param_val(c, 1), graph_param_val(c, 2)) in
-    let gm = bjt_gm(vbe, graph_param_val(c, 0), graph_param_val(c, 1), graph_param_val(c, 2)) in
-    if n = nb then
-        if m = nb then gbe else if m = ne then 0 - gbe else 0
-    else if n = nc_ then
-        if m = nb then gm else if m = ne then 0 - gm else 0
-    else if n = ne then
-        let ge = gbe + gm in
-        if m = nb then 0 - ge else if m = ne then ge else 0
-    else 0
-
-// PNP BJT Jacobian: same structure as NPN but uses Veb = V[emit] - V[base].
-define stamp_J_pnp(c, n, m, v) =
-    let nb = term_base(c) in let nc_ = term_coll(c) in let ne = term_emit(c) in
-    let veb = nth(v, ne) - nth(v, nb) in
-    let gbe = bjt_gbe(veb, graph_param_val(c, 1), graph_param_val(c, 2)) in
-    let gm = bjt_gm(veb, graph_param_val(c, 0), graph_param_val(c, 1), graph_param_val(c, 2)) in
-    if n = nb then
-        if m = nb then gbe else if m = ne then 0 - gbe else 0
-    else if n = nc_ then
-        if m = nb then gm else if m = ne then 0 - gm else 0
-    else if n = ne then
-        let ge = gbe + gm in
-        if m = nb then 0 - ge else if m = ne then ge else 0
-    else 0
-
-define stamp_J_zener(c, n, m, v) =
-    let np = term_pos(c) in let nm_ = term_neg(c) in
-    let vd = nth(v, np) - nth(v, nm_) in
-    let gz = zener_conductance(vd, graph_param_val(c, 0), graph_param_val(c, 1)) in
-    stamp_2port_J(np, nm_, gz, n, m)
-
-// NMOS Jacobian: Id flows drain→source. gate draws no current.
-define stamp_J_nmos(c, n, m, v) =
-    let ng = term_gate(c) in let nd = term_drain(c) in let ns_ = term_source(c) in
-    let vgs = nth(v, ng) - nth(v, ns_) in
-    let vds = nth(v, nd) - nth(v, ns_) in
-    let gm = nmos_gm(vgs, vds, graph_param_val(c, 0), graph_param_val(c, 1)) in
-    let gds = nmos_gds(vgs, vds, graph_param_val(c, 0), graph_param_val(c, 1)) in
-    if n = nd then
-        if m = ng then gm else if m = nd then gds else if m = ns_ then 0 - gm - gds else 0
-    else if n = ns_ then
-        if m = ng then 0 - gm else if m = nd then 0 - gds else if m = ns_ then gm + gds else 0
-    else 0
-
-// PMOS Jacobian: current flows source→drain. Uses Vsg/Vsd and |Vth|.
-define stamp_J_pmos(c, n, m, v) =
-    let ng = term_gate(c) in let nd = term_drain(c) in let ns_ = term_source(c) in
-    let vsg = nth(v, ns_) - nth(v, ng) in
-    let vsd = nth(v, ns_) - nth(v, nd) in
-    let vth_abs = abs(graph_param_val(c, 1)) in
-    let gm = pmos_gm(vsg, vsd, graph_param_val(c, 0), vth_abs) in
-    let gds = pmos_gds(vsg, vsd, graph_param_val(c, 0), vth_abs) in
-    if n = ns_ then
-        if m = ng then 0 - gm else if m = nd then 0 - gds else if m = ns_ then gm + gds else 0
-    else if n = nd then
-        if m = ng then gm else if m = nd then gds else if m = ns_ then 0 - gm - gds else 0
-    else 0
-
-// Op-Amp Jacobian: V[out] = gain * (V[non_inv] - V[inv]).
-// Stamps only at the output node (infinite input impedance).
-define stamp_J_opamp(c, n, m, v) =
-    let ni = term_inv(c) in let nn = term_noninv(c) in let no = term_out(c) in
-    let a = graph_param_val(c, 0) in
-    if n = no then
-        if m = no then 1 else if m = nn then 0 - a else if m = ni then a else 0
-    else 0
-
-// =============================================================================
 // Sparse Jacobian stamps — entry-list form (one call per component)
 // =============================================================================
 
@@ -517,140 +468,6 @@ define stamp_J_opamp_entries(c, v) =
     let ni = term_inv(c) in let nn = term_noninv(c) in let no = term_out(c) in
     let a = graph_param_val(c, 0) in
     [[no, no, 1], [no, nn, 0 - a], [no, ni, a]]
-
-// =============================================================================
-// MNA residual stamping — each component stamps into F[n]
-// =============================================================================
-
-define stamp_F_resistor(c, n, v) =
-    let np = term_pos(c) in let nm_ = term_neg(c) in
-    let g = 1 / graph_param_val(c, 0) in
-    let vc = nth(v, np) - nth(v, nm_) in
-    if n = np then g * vc
-    else if n = nm_ then 0 - g * vc
-    else 0
-
-define stamp_F_capacitor(c, n, v) =
-    let np = term_pos(c) in let nm_ = term_neg(c) in
-    let gc = graph_param_val(c, 0) / sim_dt_val in
-    let vc = nth(v, np) - nth(v, nm_) in
-    let vc_prev = nth(sim_state, state_index_of(c)) in
-    let ic = gc * (vc - vc_prev) in
-    if n = np then ic
-    else if n = nm_ then 0 - ic
-    else 0
-
-define stamp_F_diode(c, n, v) =
-    let np = term_pos(c) in let nm_ = term_neg(c) in
-    let vd = nth(v, np) - nth(v, nm_) in
-    let id = diode_current(vd, graph_param_val(c, 0), graph_param_val(c, 1), graph_param_val(c, 2)) in
-    if n = np then id
-    else if n = nm_ then 0 - id
-    else 0
-
-define stamp_F_vsource(c, n, v) =
-    let np = term_pos(c) in let nm_ = term_neg(c) in
-    let gs = 1e12 in
-    let vs = graph_param_val(c, 0) in
-    let cur = gs * (nth(v, np) - nth(v, nm_) - vs) in
-    if n = np then cur
-    else if n = nm_ then 0 - cur
-    else 0
-
-// AC voltage source: V(t) = V_peak * sin(2*pi*freq*t).
-// Params: param(c,0)=V_peak, param(c,1)=freq. Uses sim_time_val from server.
-define stamp_F_acsource(c, n, v) =
-    let np = term_pos(c) in let nm_ = term_neg(c) in
-    let gs = 1e12 in
-    let vpeak = graph_param_val(c, 0) in
-    let freq = graph_param_val(c, 1) in
-    let vs = vpeak * sin(2 * pi * freq * sim_time_val) in
-    let cur = gs * (nth(v, np) - nth(v, nm_) - vs) in
-    if n = np then cur
-    else if n = nm_ then 0 - cur
-    else 0
-
-define stamp_F_csource(c, n, v) =
-    let np = term_pos(c) in let nm_ = term_neg(c) in
-    let is_val = graph_param_val(c, 0) in
-    if n = np then is_val
-    else if n = nm_ then 0 - is_val
-    else 0
-
-define stamp_F_ground(c, n, v) =
-    let ng = sim_connected_net(c) in
-    if n = ng then 1e12 * nth(v, ng)
-    else 0
-
-// Inductor residual: backward Euler companion model.
-// i_L = i_L_prev + (dt/L) * v_L. State variable is inductor current.
-define stamp_F_inductor(c, n, v) =
-    let np = term_pos(c) in let nm_ = term_neg(c) in
-    let gl = sim_dt_val / graph_param_val(c, 0) in
-    let vl = nth(v, np) - nth(v, nm_) in
-    let il_prev = nth(sim_state, state_index_of(c)) in
-    let il = il_prev + gl * vl in
-    if n = np then il
-    else if n = nm_ then 0 - il
-    else 0
-
-// NPN BJT residual: I_B enters base, I_C enters collector, I_E leaves emitter.
-define stamp_F_npn(c, n, v) =
-    let nb = term_base(c) in let nc_ = term_coll(c) in let ne = term_emit(c) in
-    let vbe = nth(v, nb) - nth(v, ne) in
-    let ib = bjt_ib(vbe, graph_param_val(c, 1), graph_param_val(c, 2)) in
-    let ic = bjt_ic(vbe, graph_param_val(c, 0), graph_param_val(c, 1), graph_param_val(c, 2)) in
-    if n = nb then ib
-    else if n = nc_ then ic
-    else if n = ne then 0 - ib - ic
-    else 0
-
-// PNP BJT residual: uses Veb = V[emit] - V[base]. Signs reversed from NPN.
-define stamp_F_pnp(c, n, v) =
-    let nb = term_base(c) in let nc_ = term_coll(c) in let ne = term_emit(c) in
-    let veb = nth(v, ne) - nth(v, nb) in
-    let ib = bjt_ib(veb, graph_param_val(c, 1), graph_param_val(c, 2)) in
-    let ic = bjt_ic(veb, graph_param_val(c, 0), graph_param_val(c, 1), graph_param_val(c, 2)) in
-    if n = nb then 0 - ib
-    else if n = nc_ then 0 - ic
-    else if n = ne then ib + ic
-    else 0
-
-define stamp_F_zener(c, n, v) =
-    let np = term_pos(c) in let nm_ = term_neg(c) in
-    let vd = nth(v, np) - nth(v, nm_) in
-    let iz = zener_current(vd, graph_param_val(c, 0), graph_param_val(c, 1)) in
-    if n = np then iz
-    else if n = nm_ then 0 - iz
-    else 0
-
-// NMOS residual: Id flows from drain to source.
-define stamp_F_nmos(c, n, v) =
-    let ng = term_gate(c) in let nd = term_drain(c) in let ns_ = term_source(c) in
-    let vgs = nth(v, ng) - nth(v, ns_) in
-    let vds = nth(v, nd) - nth(v, ns_) in
-    let id = nmos_id(vgs, vds, graph_param_val(c, 0), graph_param_val(c, 1)) in
-    if n = nd then id
-    else if n = ns_ then 0 - id
-    else 0
-
-// PMOS residual: current flows from source to drain.
-define stamp_F_pmos(c, n, v) =
-    let ng = term_gate(c) in let nd = term_drain(c) in let ns_ = term_source(c) in
-    let vsg = nth(v, ns_) - nth(v, ng) in
-    let vsd = nth(v, ns_) - nth(v, nd) in
-    let vth_abs = abs(graph_param_val(c, 1)) in
-    let id = pmos_id(vsg, vsd, graph_param_val(c, 0), vth_abs) in
-    if n = ns_ then id
-    else if n = nd then 0 - id
-    else 0
-
-// Op-Amp residual: enforces V[out] = gain * (V[non_inv] - V[inv]).
-define stamp_F_opamp(c, n, v) =
-    let ni = term_inv(c) in let nn = term_noninv(c) in let no = term_out(c) in
-    let a = graph_param_val(c, 0) in
-    if n = no then nth(v, no) - a * (nth(v, nn) - nth(v, ni))
-    else 0
 
 // =============================================================================
 // Sparse residual stamps — entry-list form (one call per component)
@@ -747,41 +564,245 @@ define stamp_F_opamp_entries(c, v) =
     [[no, nth(v, no) - a * (nth(v, nn) - nth(v, ni))]]
 
 // =============================================================================
-// Component dispatch
+// New component stamps — potentiometer, switch, buzzer, LDR, photodiode, fuse
 // =============================================================================
 
-define stamp_J_component(c, n, m, v) =
-    if is_resistor(c) then stamp_J_resistor(c, n, m, v)
-    else if is_capacitor(c) then stamp_J_capacitor(c, n, m, v)
-    else if is_inductor(c) then stamp_J_inductor(c, n, m, v)
-    else if is_diode(c) ∨ is_led(c) then stamp_J_diode(c, n, m, v)
-    else if is_zener(c) then stamp_J_zener(c, n, m, v)
-    else if is_npn(c) then stamp_J_npn(c, n, m, v)
-    else if is_pnp(c) then stamp_J_pnp(c, n, m, v)
-    else if is_nmos(c) then stamp_J_nmos(c, n, m, v)
-    else if is_pmos(c) then stamp_J_pmos(c, n, m, v)
-    else if is_opamp(c) then stamp_J_opamp(c, n, m, v)
-    else if is_voltage_source(c) then stamp_J_vsource(c, n, m, v)
-    else if is_current_source(c) then 0
-    else if is_ground(c) then stamp_J_ground(c, n, m, v)
-    else 0
+// Potentiometer: 3-terminal variable resistor. param(c,0)=R, param(c,1)=wiper (0..1).
+// Wiper divides total R into R_top = R*w and R_bot = R*(1-w).
+// left--[R_top]--wiper--[R_bot]--right.
+define pot_r_top(c) = graph_param_val(c, 0) * graph_param_val(c, 1)
+define pot_r_bot(c) = graph_param_val(c, 0) * (1 - graph_param_val(c, 1))
+define pot_g_top(c) = 1 / pot_r_top(c)
+define pot_g_bot(c) = 1 / pot_r_bot(c)
 
-define stamp_F_component(c, n, v) =
-    if is_resistor(c) then stamp_F_resistor(c, n, v)
-    else if is_capacitor(c) then stamp_F_capacitor(c, n, v)
-    else if is_inductor(c) then stamp_F_inductor(c, n, v)
-    else if is_diode(c) ∨ is_led(c) then stamp_F_diode(c, n, v)
-    else if is_zener(c) then stamp_F_zener(c, n, v)
-    else if is_npn(c) then stamp_F_npn(c, n, v)
-    else if is_pnp(c) then stamp_F_pnp(c, n, v)
-    else if is_nmos(c) then stamp_F_nmos(c, n, v)
-    else if is_pmos(c) then stamp_F_pmos(c, n, v)
-    else if is_opamp(c) then stamp_F_opamp(c, n, v)
-    else if is_ac_vsource(c) then stamp_F_acsource(c, n, v)
-    else if is_dc_vsource(c) then stamp_F_vsource(c, n, v)
-    else if is_current_source(c) then stamp_F_csource(c, n, v)
-    else if is_ground(c) then stamp_F_ground(c, n, v)
-    else 0
+define stamp_J_pot_entries(c, v) =
+    let nl = term_pot_left(c) in let nr = term_pot_right(c) in let nw = term_pot_wiper(c) in
+    let gt = pot_g_top(c) in let gb = pot_g_bot(c) in
+    [[nl, nl, gt], [nl, nw, 0 - gt], [nw, nl, 0 - gt], [nw, nw, gt + gb],
+     [nw, nr, 0 - gb], [nr, nw, 0 - gb], [nr, nr, gb]]
+
+define stamp_F_pot_entries(c, v) =
+    let nl = term_pot_left(c) in let nr = term_pot_right(c) in let nw = term_pot_wiper(c) in
+    let gt = pot_g_top(c) in let gb = pot_g_bot(c) in
+    let vl = nth(v, nl) in let vr = nth(v, nr) in let vw = nth(v, nw) in
+    [[nl, gt * (vl - vw)], [nw, gt * (vw - vl) + gb * (vw - vr)], [nr, gb * (vr - vw)]]
+
+// Switch: 2-port, param(c,0)=closed (1=on, 0=off).
+// Closed: very low resistance (0.001 Ω). Open: very high (1e12 Ω).
+define switch_g(c) = if graph_param_val(c, 0) > 0.5 then 1000 else 1e-12
+
+define stamp_J_switch_entries(c, v) =
+    let np = term_pos(c) in let nm = term_neg(c) in let g = switch_g(c) in
+    [[np, np, g], [np, nm, 0 - g], [nm, np, 0 - g], [nm, nm, g]]
+
+define stamp_F_switch_entries(c, v) =
+    let np = term_pos(c) in let nm = term_neg(c) in let g = switch_g(c) in
+    let i = g * (nth(v, np) - nth(v, nm)) in
+    [[np, i], [nm, 0 - i]]
+
+// Buzzer/Speaker: pure resistive load. param(c,0)=R.
+define stamp_J_buzzer_entries(c, v) =
+    let np = term_pos(c) in let nm = term_neg(c) in
+    let g = 1 / graph_param_val(c, 0) in
+    [[np, np, g], [np, nm, 0 - g], [nm, np, 0 - g], [nm, nm, g]]
+
+define stamp_F_buzzer_entries(c, v) =
+    let np = term_pos(c) in let nm = term_neg(c) in
+    let g = 1 / graph_param_val(c, 0) in
+    let i = g * (nth(v, np) - nth(v, nm)) in
+    [[np, i], [nm, 0 - i]]
+
+// Photoresistor (LDR): param(c,0)=R_dark, param(c,1)=R_light, param(c,2)=light (0..1).
+// R = R_dark * (1 - light) + R_light * light  (linear interpolation).
+define ldr_resistance(c) =
+    let rd = graph_param_val(c, 0) in let rl = graph_param_val(c, 1) in
+    let light = graph_param_val(c, 2) in
+    rd * (1 - light) + rl * light
+
+define stamp_J_ldr_entries(c, v) =
+    let np = term_pos(c) in let nm = term_neg(c) in
+    let g = 1 / ldr_resistance(c) in
+    [[np, np, g], [np, nm, 0 - g], [nm, np, 0 - g], [nm, nm, g]]
+
+define stamp_F_ldr_entries(c, v) =
+    let np = term_pos(c) in let nm = term_neg(c) in
+    let g = 1 / ldr_resistance(c) in
+    let i = g * (nth(v, np) - nth(v, nm)) in
+    [[np, i], [nm, 0 - i]]
+
+// Photodiode: diode + light-generated photocurrent.
+// param(c,0)=Is, param(c,1)=Iph, param(c,2)=light (0..1).
+// I = Is*(exp(Vd/Vt)-1) - Iph*light   (reverse-biased: Iph dominates).
+define photodiode_Vt = 0.02585
+
+define photodiode_current(Vd, Is, Iph, light) =
+    let vc = diode_vcrit(1, photodiode_Vt) in
+    let id = if Vd > vc then
+        let ic = Is * (exp(vc / photodiode_Vt) - 1) in
+        let gc = Is / photodiode_Vt * exp(vc / photodiode_Vt) in
+        ic + gc * (Vd - vc)
+    else Is * (exp(Vd / photodiode_Vt) - 1) in
+    id - Iph * light
+
+define photodiode_conductance(Vd, Is) =
+    let vc = diode_vcrit(1, photodiode_Vt) in
+    if Vd > vc then Is / photodiode_Vt * exp(vc / photodiode_Vt)
+    else Is / photodiode_Vt * exp(Vd / photodiode_Vt)
+
+define stamp_J_photodiode_entries(c, v) =
+    let np = term_pos(c) in let nm = term_neg(c) in
+    let vd = nth(v, np) - nth(v, nm) in
+    let g = photodiode_conductance(vd, graph_param_val(c, 0)) in
+    [[np, np, g], [np, nm, 0 - g], [nm, np, 0 - g], [nm, nm, g]]
+
+define stamp_F_photodiode_entries(c, v) =
+    let np = term_pos(c) in let nm = term_neg(c) in
+    let vd = nth(v, np) - nth(v, nm) in
+    let i = photodiode_current(vd, graph_param_val(c, 0), graph_param_val(c, 1), graph_param_val(c, 2)) in
+    [[np, i], [nm, 0 - i]]
+
+// Fuse: low-resistance element. param(c,0)=R.
+define stamp_J_fuse_entries(c, v) =
+    let np = term_pos(c) in let nm = term_neg(c) in
+    let g = 1 / graph_param_val(c, 0) in
+    [[np, np, g], [np, nm, 0 - g], [nm, np, 0 - g], [nm, nm, g]]
+
+define stamp_F_fuse_entries(c, v) =
+    let np = term_pos(c) in let nm = term_neg(c) in
+    let g = 1 / graph_param_val(c, 0) in
+    let i = g * (nth(v, np) - nth(v, nm)) in
+    [[np, i], [nm, 0 - i]]
+
+// Transformer: coupled inductors via backward Euler companion model.
+// param(c,0)=L1, param(c,1)=L2, param(c,2)=k, param(c,3)=initial1, param(c,4)=initial2.
+// Mutual inductance M = k * sqrt(L1 * L2).
+// Companion model (backward Euler, dt from sim_dt_val):
+//   V1 = L1/dt * I1 + M/dt * I2 - L1/dt * I1_prev - M/dt * I2_prev
+//   V2 = M/dt * I1 + L2/dt * I2 - M/dt * I1_prev - L2/dt * I2_prev
+// This is expressed as conductance stamps on the 4 terminals.
+// State variables: I1 (primary current), I2 (secondary current).
+
+define xfmr_M(c) = graph_param_val(c, 2) * sqrt(graph_param_val(c, 0) * graph_param_val(c, 1))
+
+define stamp_J_xfmr_entries(c, v) =
+    let n1p = term_pri_pos(c) in let n1m = term_pri_neg(c) in
+    let n2p = term_sec_pos(c) in let n2m = term_sec_neg(c) in
+    let g1 = sim_dt_val / graph_param_val(c, 0) in
+    let g2 = sim_dt_val / graph_param_val(c, 1) in
+    let gm = sim_dt_val / xfmr_M(c) in
+    [[n1p, n1p, g1], [n1p, n1m, 0 - g1], [n1m, n1p, 0 - g1], [n1m, n1m, g1],
+     [n2p, n2p, g2], [n2p, n2m, 0 - g2], [n2m, n2p, 0 - g2], [n2m, n2m, g2],
+     [n1p, n2p, gm], [n1p, n2m, 0 - gm], [n1m, n2p, 0 - gm], [n1m, n2m, gm],
+     [n2p, n1p, gm], [n2p, n1m, 0 - gm], [n2m, n1p, 0 - gm], [n2m, n1m, gm]]
+
+define stamp_F_xfmr_entries(c, v) =
+    let n1p = term_pri_pos(c) in let n1m = term_pri_neg(c) in
+    let n2p = term_sec_pos(c) in let n2m = term_sec_neg(c) in
+    let g1 = sim_dt_val / graph_param_val(c, 0) in
+    let g2 = sim_dt_val / graph_param_val(c, 1) in
+    let gm = sim_dt_val / xfmr_M(c) in
+    let v1 = nth(v, n1p) - nth(v, n1m) in
+    let v2 = nth(v, n2p) - nth(v, n2m) in
+    let si = state_index_of(c) in
+    let i1_prev = nth(sim_state_vec, si) in
+    let i2_prev = nth(sim_state_vec, si + 1) in
+    let i1_cur = g1 * v1 + gm * v2 in
+    let i2_cur = gm * v1 + g2 * v2 in
+    let ieq1 = i1_cur - i1_prev in
+    let ieq2 = i2_cur - i2_prev in
+    [[n1p, ieq1], [n1m, 0 - ieq1], [n2p, ieq2], [n2m, 0 - ieq2]]
+
+// =============================================================================
+// Dependent source stamps (VCVS, VCCS, CCVS, CCCS)
+// =============================================================================
+
+// VCVS: Vout = gain * Vctrl. Modeled as high-gain feedback.
+// param(c,0) = gain (Av).
+define stamp_J_vcvs_entries(c, v) =
+    let ncp = term_ctrl_pos(c) in let ncm = term_ctrl_neg(c) in
+    let nop = term_out_pos(c) in let nom = term_out_neg(c) in
+    let a = graph_param_val(c, 0) in
+    let g_big = 1e6 in
+    [[nop, nop, g_big], [nop, nom, 0 - g_big],
+     [nom, nop, 0 - g_big], [nom, nom, g_big],
+     [nop, ncp, 0 - g_big * a], [nop, ncm, g_big * a],
+     [nom, ncp, g_big * a], [nom, ncm, 0 - g_big * a]]
+
+define stamp_F_vcvs_entries(c, v) =
+    let ncp = term_ctrl_pos(c) in let ncm = term_ctrl_neg(c) in
+    let nop = term_out_pos(c) in let nom = term_out_neg(c) in
+    let a = graph_param_val(c, 0) in
+    let g_big = 1e6 in
+    let vctrl = nth(v, ncp) - nth(v, ncm) in
+    let vout = nth(v, nop) - nth(v, nom) in
+    let err = g_big * (vout - a * vctrl) in
+    [[nop, err], [nom, 0 - err]]
+
+// VCCS: Iout = gm * Vctrl. param(c,0) = gm.
+define stamp_J_vccs_entries(c, v) =
+    let ncp = term_ctrl_pos(c) in let ncm = term_ctrl_neg(c) in
+    let nop = term_out_pos(c) in let nom = term_out_neg(c) in
+    let gm = graph_param_val(c, 0) in
+    [[nop, ncp, gm], [nop, ncm, 0 - gm],
+     [nom, ncp, 0 - gm], [nom, ncm, gm]]
+
+define stamp_F_vccs_entries(c, v) =
+    let ncp = term_ctrl_pos(c) in let ncm = term_ctrl_neg(c) in
+    let nop = term_out_pos(c) in let nom = term_out_neg(c) in
+    let gm = graph_param_val(c, 0) in
+    let i = gm * (nth(v, ncp) - nth(v, ncm)) in
+    [[nop, i], [nom, 0 - i]]
+
+// CCVS: Vout = rm * Ictrl. param(c,0) = rm (transresistance).
+// Control current sensed through a small resistance (1e-3 Ω) between ctrl ports.
+define stamp_J_ccvs_entries(c, v) =
+    let ncp = term_ctrl_pos(c) in let ncm = term_ctrl_neg(c) in
+    let nop = term_out_pos(c) in let nom = term_out_neg(c) in
+    let rm = graph_param_val(c, 0) in
+    let g_sense = 1000 in
+    let g_big = 1e6 in
+    [[ncp, ncp, g_sense], [ncp, ncm, 0 - g_sense],
+     [ncm, ncp, 0 - g_sense], [ncm, ncm, g_sense],
+     [nop, nop, g_big], [nop, nom, 0 - g_big],
+     [nom, nop, 0 - g_big], [nom, nom, g_big],
+     [nop, ncp, 0 - g_big * rm * g_sense], [nop, ncm, g_big * rm * g_sense],
+     [nom, ncp, g_big * rm * g_sense], [nom, ncm, 0 - g_big * rm * g_sense]]
+
+define stamp_F_ccvs_entries(c, v) =
+    let ncp = term_ctrl_pos(c) in let ncm = term_ctrl_neg(c) in
+    let nop = term_out_pos(c) in let nom = term_out_neg(c) in
+    let rm = graph_param_val(c, 0) in
+    let g_sense = 1000 in let g_big = 1e6 in
+    let i_ctrl = g_sense * (nth(v, ncp) - nth(v, ncm)) in
+    let i_sense = i_ctrl in
+    let vout = nth(v, nop) - nth(v, nom) in
+    let err = g_big * (vout - rm * i_sense) in
+    [[ncp, i_ctrl], [ncm, 0 - i_ctrl], [nop, err], [nom, 0 - err]]
+
+// CCCS: Iout = gain * Ictrl. param(c,0) = gain (Ai).
+// Control current sensed through a small resistance between ctrl ports.
+define stamp_J_cccs_entries(c, v) =
+    let ncp = term_ctrl_pos(c) in let ncm = term_ctrl_neg(c) in
+    let nop = term_out_pos(c) in let nom = term_out_neg(c) in
+    let ai = graph_param_val(c, 0) in
+    let g_sense = 1000 in
+    [[ncp, ncp, g_sense], [ncp, ncm, 0 - g_sense],
+     [ncm, ncp, 0 - g_sense], [ncm, ncm, g_sense],
+     [nop, ncp, ai * g_sense], [nop, ncm, 0 - ai * g_sense],
+     [nom, ncp, 0 - ai * g_sense], [nom, ncm, ai * g_sense]]
+
+define stamp_F_cccs_entries(c, v) =
+    let ncp = term_ctrl_pos(c) in let ncm = term_ctrl_neg(c) in
+    let nop = term_out_pos(c) in let nom = term_out_neg(c) in
+    let ai = graph_param_val(c, 0) in
+    let g_sense = 1000 in
+    let i_ctrl = g_sense * (nth(v, ncp) - nth(v, ncm)) in
+    let i_out = ai * i_ctrl in
+    [[ncp, i_ctrl], [ncm, 0 - i_ctrl], [nop, i_out], [nom, 0 - i_out]]
+
+// =============================================================================
+// Component dispatch
+// =============================================================================
 
 // Sparse entry-list dispatch
 define stamp_J_entries(c, v) =
@@ -795,6 +816,17 @@ define stamp_J_entries(c, v) =
     else if is_nmos(c) then stamp_J_nmos_entries(c, v)
     else if is_pmos(c) then stamp_J_pmos_entries(c, v)
     else if is_opamp(c) then stamp_J_opamp_entries(c, v)
+    else if is_potentiometer(c) then stamp_J_pot_entries(c, v)
+    else if is_switch(c) then stamp_J_switch_entries(c, v)
+    else if is_buzzer(c) then stamp_J_buzzer_entries(c, v)
+    else if is_photoresistor(c) then stamp_J_ldr_entries(c, v)
+    else if is_photodiode(c) then stamp_J_photodiode_entries(c, v)
+    else if is_fuse(c) then stamp_J_fuse_entries(c, v)
+    else if is_transformer(c) then stamp_J_xfmr_entries(c, v)
+    else if is_vcvs(c) then stamp_J_vcvs_entries(c, v)
+    else if is_vccs(c) then stamp_J_vccs_entries(c, v)
+    else if is_ccvs(c) then stamp_J_ccvs_entries(c, v)
+    else if is_cccs(c) then stamp_J_cccs_entries(c, v)
     else if is_voltage_source(c) then stamp_J_vsource_entries(c, v)
     else if is_current_source(c) then []
     else if is_ground(c) then stamp_J_ground_entries(c, v)
@@ -811,6 +843,17 @@ define stamp_F_entries(c, v) =
     else if is_nmos(c) then stamp_F_nmos_entries(c, v)
     else if is_pmos(c) then stamp_F_pmos_entries(c, v)
     else if is_opamp(c) then stamp_F_opamp_entries(c, v)
+    else if is_potentiometer(c) then stamp_F_pot_entries(c, v)
+    else if is_switch(c) then stamp_F_switch_entries(c, v)
+    else if is_buzzer(c) then stamp_F_buzzer_entries(c, v)
+    else if is_photoresistor(c) then stamp_F_ldr_entries(c, v)
+    else if is_photodiode(c) then stamp_F_photodiode_entries(c, v)
+    else if is_fuse(c) then stamp_F_fuse_entries(c, v)
+    else if is_transformer(c) then stamp_F_xfmr_entries(c, v)
+    else if is_vcvs(c) then stamp_F_vcvs_entries(c, v)
+    else if is_vccs(c) then stamp_F_vccs_entries(c, v)
+    else if is_ccvs(c) then stamp_F_ccvs_entries(c, v)
+    else if is_cccs(c) then stamp_F_cccs_entries(c, v)
     else if is_ac_vsource(c) then stamp_F_acsource_entries(c, v)
     else if is_dc_vsource(c) then stamp_F_vsource_entries(c, v)
     else if is_current_source(c) then stamp_F_csource_entries(c, v)

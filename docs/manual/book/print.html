@@ -45,7 +45,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-fd46c5c1.js";
+            window.path_to_searchindex_js = "searchindex-c6bc1f9f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-902ee45b.js"></script>
@@ -204,8 +204,8 @@
 </thead>
 <tbody>
 <tr><td>Grammar</td><td>Fully implemented</td></tr>
-<tr><td>Tests</td><td>1,762 Rust unit tests</td></tr>
-<tr><td>Examples</td><td>71 Kleis files across 15+ domains</td></tr>
+<tr><td>Tests</td><td>2,490 Rust unit tests</td></tr>
+<tr><td>Examples</td><td>223 Kleis files across 38 domains</td></tr>
 <tr><td>Built-in Functions</td><td>100+ (including LAPACK numerical operations)</td></tr>
 </tbody>
 </table>
@@ -237,6 +237,11 @@
 <tr><td><strong>Protocols</strong></td><td>IPv4 packets, IP routing, stop-and-wait ARQ</td></tr>
 <tr><td><strong>Authorization</strong></td><td>OAuth2 scopes, Google Zanzibar</td></tr>
 <tr><td><strong>Formal Methods</strong></td><td>Petri nets, mutex verification</td></tr>
+<tr><td><strong>Hardware</strong></td><td>ALU verification, bitvector arithmetic</td></tr>
+<tr><td><strong>Electronics</strong></td><td>Circuit schematics, multivibrators, rectifiers</td></tr>
+<tr><td><strong>Music</strong></td><td>Sheet music generation, LilyPond engraving</td></tr>
+<tr><td><strong>Linguistics</strong></td><td>Middle Egyptian hieroglyphs, disambiguation</td></tr>
+<tr><td><strong>Business</strong></td><td>Order-to-cash workflows, process verification</td></tr>
 <tr><td><strong>Games</strong></td><td>Chess, Contract Bridge, Sudoku</td></tr>
 </tbody>
 </table>
@@ -332,7 +337,7 @@ define angle_sin(θ) = sin(θ)    // A function call
 <h2 id="the-repl"><a class="header" href="#the-repl">The REPL</a></h2>
 <p>The easiest way to experiment with Kleis is the <strong>REPL</strong> (Read-Eval-Print Loop):</p>
 <pre><code class="language-bash">$ cargo run --bin repl
-🧮 Kleis REPL v0.1.0
+🧮 Kleis REPL v1.0.0
    Type :help for commands, :quit to exit
 
 λ&gt; 2 + 2
@@ -2304,7 +2309,9 @@ User Code (Kleis Expression)
 <p>The core abstraction is defined in <code>src/solvers/backend.rs</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>pub trait SolverBackend {
+</span>// Simplified — the full trait (src/solvers/backend.rs) has 16 methods
+// including scope management, structure loading, and function definition.
+pub trait SolverBackend {
     /// Get solver name (e.g., "Z3", "CVC5")
     fn name(&amp;self) -&gt; &amp;str;
 
@@ -2331,7 +2338,8 @@ User Code (Kleis Expression)
     fn are_equivalent(&amp;mut self, e1: &amp;Expression, e2: &amp;Expression) 
         -&gt; Result&lt;bool, String&gt;;
 
-    // ... additional methods for scope management, assertions, etc.
+    // ... plus: load_structure_axioms, check_consistency, push, pop,
+    //     reset, load_identity_element, assert_expression, define_function
 }
 <span class="boring">}</span></code></pre>
 <p><strong>Key design principle:</strong> All public methods work with Kleis <code>Expression</code>, not solver-specific types. Solver internals never escape the abstraction.</p>
@@ -2436,7 +2444,7 @@ if discovery::is_available("Z3") {
 <p>The REPL (Read-Eval-Print Loop) is an interactive environment for experimenting with Kleis:</p>
 <pre><code class="language-bash">$ cargo run --bin repl
 
-🧮 Kleis REPL v0.1.0
+🧮 Kleis REPL v1.0.0
    Type :help for commands, :quit to exit
 
 λ&gt;
@@ -13218,7 +13226,7 @@ Loaded standard library.
 </ul>
 <h2 id="running-in-the-repl"><a class="header" href="#running-in-the-repl">Running in the REPL</a></h2>
 <pre><code>$ cargo run --bin repl
-🧮 Kleis REPL v0.1.0
+🧮 Kleis REPL v1.0.0
 
 λ&gt; :load examples/meta-programming/lisp_parser.kleis
 ✅ Loaded: 2 files, 60 functions, 15 structures, 5 data types

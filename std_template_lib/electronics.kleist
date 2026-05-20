@@ -137,6 +137,125 @@
     graph_height: "32"
 }
 
+@template potentiometer {
+    pattern: "potentiometer()"
+    typst: "#box(image(\"static/svg/electronics/potentiometer.svg\", width: 2em, height: 1.2em, fit: \"contain\"))"
+    unicode: "POT"
+    category: "electronics_passive"
+    glyph: "POT"
+    mode: "content"
+    svg: "static/svg/electronics/potentiometer.svg"
+    component_type: "Potentiometer"
+    package: "Through-hole"
+    symbol_standard: "IEC"
+    params: "R:real:10000;wiper:real:0.5"
+    ports: "left:0,0.6;right:1,0.6;wiper:0.5,0"
+    graph_width: "64"
+    graph_height: "48"
+}
+
+@template spst_switch {
+    pattern: "spst_switch()"
+    typst: "#box(image(\"static/svg/electronics/spst_switch.svg\", width: 2em, height: 1em, fit: \"contain\"))"
+    unicode: "SW"
+    category: "electronics_passive"
+    glyph: "SW"
+    mode: "content"
+    svg: "static/svg/electronics/spst_switch.svg"
+    component_type: "Switch"
+    package: "Through-hole"
+    symbol_standard: "IEC"
+    params: "closed:real:1"
+    ports: "left:0,0.5;right:1,0.5"
+    graph_width: "64"
+    graph_height: "32"
+}
+
+@template buzzer {
+    pattern: "buzzer()"
+    typst: "#box(image(\"static/svg/electronics/buzzer.svg\", width: 2em, height: 1.2em, fit: \"contain\"))"
+    unicode: "BZ"
+    category: "electronics_passive"
+    glyph: "BZ"
+    mode: "content"
+    svg: "static/svg/electronics/buzzer.svg"
+    component_type: "Buzzer"
+    package: "Through-hole"
+    symbol_standard: "IEC"
+    params: "R:real:32"
+    ports: "pos:0,0.5;neg:1,0.5"
+    graph_width: "64"
+    graph_height: "40"
+}
+
+@template photoresistor {
+    pattern: "photoresistor()"
+    typst: "#box(image(\"static/svg/electronics/photoresistor.svg\", width: 2em, height: 1.2em, fit: \"contain\"))"
+    unicode: "LDR"
+    category: "electronics_passive"
+    glyph: "LDR"
+    mode: "content"
+    svg: "static/svg/electronics/photoresistor.svg"
+    component_type: "Photoresistor"
+    package: "Through-hole"
+    symbol_standard: "IEC"
+    params: "R_dark:real:1000000;R_light:real:100;light:real:0.5"
+    ports: "left:0,0.6;right:1,0.6"
+    graph_width: "64"
+    graph_height: "40"
+}
+
+@template photodiode {
+    pattern: "photodiode()"
+    typst: "#box(image(\"static/svg/electronics/photodiode.svg\", width: 2em, height: 1.2em, fit: \"contain\"))"
+    unicode: "PD"
+    category: "electronics_passive"
+    glyph: "PD"
+    mode: "content"
+    svg: "static/svg/electronics/photodiode.svg"
+    component_type: "Photodiode"
+    package: "Through-hole"
+    symbol_standard: "IEC"
+    params: "Is:real:1e-12;Iph:real:1e-3;light:real:1"
+    ports: "anode:0,0.5;cathode:1,0.5"
+    graph_width: "64"
+    graph_height: "40"
+}
+
+@template fuse {
+    pattern: "fuse()"
+    typst: "#box(image(\"static/svg/electronics/fuse.svg\", width: 2em, height: 1em, fit: \"contain\"))"
+    unicode: "F"
+    category: "electronics_passive"
+    glyph: "F"
+    mode: "content"
+    svg: "static/svg/electronics/fuse.svg"
+    component_type: "Fuse"
+    package: "Through-hole"
+    symbol_standard: "IEC"
+    params: "R:real:0.01"
+    ports: "left:0,0.5;right:1,0.5"
+    graph_width: "64"
+    graph_height: "32"
+}
+
+@template transformer {
+    pattern: "transformer()"
+    typst: "#box(image(\"static/svg/electronics/transformer.svg\", width: 2em, height: 1.5em, fit: \"contain\"))"
+    unicode: "XFMR"
+    category: "electronics_passive"
+    glyph: "XFMR"
+    mode: "content"
+    svg: "static/svg/electronics/transformer.svg"
+    component_type: "Transformer"
+    package: "Through-hole"
+    symbol_standard: "IEC"
+    params: "L1:real:1e-3;L2:real:1e-3;k:real:0.99;initial1:real:0;initial2:real:0"
+    ports: "pri_pos:0,0.17;pri_neg:0,0.83;sec_pos:1,0.17;sec_neg:1,0.83"
+    graph_width: "64"
+    graph_height: "60"
+}
+
 // ============ ACTIVE COMPONENTS ============
 
 @template npn_transistor {
@@ -222,6 +341,76 @@
     ports: "inv:0,0.3;non_inv:0,0.7;out:1,0.5"
     graph_width: "64"
     graph_height: "48"
+}
+
+// ============ DEPENDENT SOURCES ============
+
+@template vcvs {
+    pattern: "vcvs()"
+    typst: "#box(image(\"static/svg/electronics/vcvs.svg\", width: 1.5em, height: 1.5em, fit: \"contain\"))"
+    unicode: "VCVS"
+    category: "electronics_source"
+    glyph: "VCVS"
+    mode: "content"
+    svg: "static/svg/electronics/vcvs.svg"
+    component_type: "VCVS"
+    package: "Symbol"
+    symbol_standard: "IEC"
+    params: "gain:real:1"
+    ports: "ctrl_pos:0,0.3;ctrl_neg:0,0.7;out_pos:1,0.3;out_neg:1,0.7"
+    graph_width: "60"
+    graph_height: "60"
+}
+
+@template vccs {
+    pattern: "vccs()"
+    typst: "#box(image(\"static/svg/electronics/vccs.svg\", width: 1.5em, height: 1.5em, fit: \"contain\"))"
+    unicode: "VCCS"
+    category: "electronics_source"
+    glyph: "VCCS"
+    mode: "content"
+    svg: "static/svg/electronics/vccs.svg"
+    component_type: "VCCS"
+    package: "Symbol"
+    symbol_standard: "IEC"
+    params: "gm:real:0.001"
+    ports: "ctrl_pos:0,0.3;ctrl_neg:0,0.7;out_pos:1,0.3;out_neg:1,0.7"
+    graph_width: "60"
+    graph_height: "60"
+}
+
+@template ccvs {
+    pattern: "ccvs()"
+    typst: "#box(image(\"static/svg/electronics/ccvs.svg\", width: 1.5em, height: 1.5em, fit: \"contain\"))"
+    unicode: "CCVS"
+    category: "electronics_source"
+    glyph: "CCVS"
+    mode: "content"
+    svg: "static/svg/electronics/ccvs.svg"
+    component_type: "CCVS"
+    package: "Symbol"
+    symbol_standard: "IEC"
+    params: "rm:real:1000"
+    ports: "ctrl_pos:0,0.3;ctrl_neg:0,0.7;out_pos:1,0.3;out_neg:1,0.7"
+    graph_width: "60"
+    graph_height: "60"
+}
+
+@template cccs {
+    pattern: "cccs()"
+    typst: "#box(image(\"static/svg/electronics/cccs.svg\", width: 1.5em, height: 1.5em, fit: \"contain\"))"
+    unicode: "CCCS"
+    category: "electronics_source"
+    glyph: "CCCS"
+    mode: "content"
+    svg: "static/svg/electronics/cccs.svg"
+    component_type: "CCCS"
+    package: "Symbol"
+    symbol_standard: "IEC"
+    params: "gain:real:1"
+    ports: "ctrl_pos:0,0.3;ctrl_neg:0,0.7;out_pos:1,0.3;out_neg:1,0.7"
+    graph_width: "60"
+    graph_height: "60"
 }
 
 // ============ SOURCES ============

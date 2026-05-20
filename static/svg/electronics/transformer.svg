@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 60" width="80" height="60">
+  <!-- Primary winding -->
+  <line x1="0" y1="10" x2="25" y2="10" stroke="#333" stroke-width="2"/>
+  <path d="M25,10 C25,16 30,16 30,22 C30,28 25,28 25,34 C25,40 30,40 30,46" fill="none" stroke="#333" stroke-width="2"/>
+  <line x1="0" y1="50" x2="25" y2="50" stroke="#333" stroke-width="2"/>
+  <line x1="25" y1="46" x2="25" y2="50" stroke="#333" stroke-width="2"/>
+  <line x1="25" y1="10" x2="30" y2="10" stroke="#333" stroke-width="2"/>
+  <!-- Core lines -->
+  <line x1="36" y1="5" x2="36" y2="55" stroke="#333" stroke-width="1.5"/>
+  <line x1="42" y1="5" x2="42" y2="55" stroke="#333" stroke-width="1.5"/>
+  <!-- Secondary winding -->
+  <line x1="80" y1="10" x2="53" y2="10" stroke="#333" stroke-width="2"/>
+  <path d="M53,10 C53,16 48,16 48,22 C48,28 53,28 53,34 C53,40 48,40 48,46" fill="none" stroke="#333" stroke-width="2"/>
+  <line x1="80" y1="50" x2="53" y2="50" stroke="#333" stroke-width="2"/>
+  <line x1="53" y1="46" x2="53" y2="50" stroke="#333" stroke-width="2"/>
+  <line x1="53" y1="10" x2="48" y2="10" stroke="#333" stroke-width="2"/>
+</svg>

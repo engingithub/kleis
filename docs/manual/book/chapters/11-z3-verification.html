@@ -44,7 +44,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-fd46c5c1.js";
+            window.path_to_searchindex_js = "../searchindex-c6bc1f9f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-902ee45b.js"></script>
@@ -450,7 +450,9 @@ User Code (Kleis Expression)
 <p>The core abstraction is defined in <code>src/solvers/backend.rs</code>:</p>
 <pre class="playground"><code class="language-rust"><span class="boring">#![allow(unused)]
 </span><span class="boring">fn main() {
-</span>pub trait SolverBackend {
+</span>// Simplified — the full trait (src/solvers/backend.rs) has 16 methods
+// including scope management, structure loading, and function definition.
+pub trait SolverBackend {
     /// Get solver name (e.g., "Z3", "CVC5")
     fn name(&amp;self) -&gt; &amp;str;
 
@@ -477,7 +479,8 @@ User Code (Kleis Expression)
     fn are_equivalent(&amp;mut self, e1: &amp;Expression, e2: &amp;Expression) 
         -&gt; Result&lt;bool, String&gt;;
 
-    // ... additional methods for scope management, assertions, etc.
+    // ... plus: load_structure_axioms, check_consistency, push, pop,
+    //     reset, load_identity_element, assert_expression, define_function
 }
 <span class="boring">}</span></code></pre>
 <p><strong>Key design principle:</strong> All public methods work with Kleis <code>Expression</code>, not solver-specific types. Solver internals never escape the abstraction.</p>
