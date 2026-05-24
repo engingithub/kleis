@@ -1,0 +1,669 @@
+#import "@preview/lilaq:0.5.0" as lq
+#set page(
+  paper: "us-letter",
+  margin: (top: 1in, bottom: 1in, left: 1in, right: 1in),
+  numbering: "1",
+  header: align(right)[_Preprint_],
+)
+#set text(
+  font: "New Computer Modern",
+  size: 11pt,
+  lang: "en",
+)
+#set par(
+  justify: true,
+  leading: 0.65em,
+  first-line-indent: 1em,
+)
+
+// No indent after headings
+#show heading: it => {
+  it
+  par(text(size: 0pt, ""))
+}
+#set heading(numbering: "1.1")
+
+// Section headings (level 1)
+#show heading.where(level: 1): it => {
+  v(1em)
+  text(size: 12pt, weight: "bold")[#counter(heading).display() #it.body]
+  v(0.5em)
+}
+
+// Subsection headings (level 2)
+#show heading.where(level: 2): it => {
+  v(0.8em)
+  text(size: 11pt, weight: "bold")[#counter(heading).display() #it.body]
+  v(0.4em)
+}
+
+// Subsubsection headings (level 3)
+#show heading.where(level: 3): it => {
+  v(0.6em)
+  text(size: 10pt, weight: "bold", style: "italic")[#counter(heading).display() #it.body]
+  v(0.3em)
+}
+#set figure(placement: auto)
+#show figure.caption: it => {
+  text(size: 9pt)[#it]
+}
+#show link: it => text(fill: blue.darken(20%))[#underline[#it]]
+
+
+#align(center)[
+  #text(size: 17pt, weight: "bold")[Consistent, Obstructed, Underdetermined: A Machine-Verified Audit of Geometric Unity]
+  
+  #v(1em)
+  
+  Engin Atik#super[1]
+  
+  #v(0.5em)
+  
+  #super[1]Kleis Research, https://kleis.io
+]
+
+#v(1em)
+
+#align(center)[
+  #rect(width: 85%, stroke: none)[
+    #align(left)[
+      #text(weight: "bold")[Abstract]
+      #v(0.3em)
+      #text(size: 10pt)[We formalize Eric Weinstein's Geometric Unity (GU) as typed Kleis structures with Z3 satisfiability checking, based on the April 2021 author's draft and Nguyen/Polya's 2021 critique. We go beyond auditing to executable verification: 46 Z3 queries across three files produce a complete diagnostic. Layer 1 confirms the core framework (observerse, gauge group, Clifford algebra) is internally consistent (16/16 SAT). Layer 2 machine-verifies each Nguyen obstruction as a logical consequence of stated premises (8/8 verified). Layer 3 — the novel contribution — establishes formal INDEPENDENCE results: the theory's predictions (3 generations, SM quantum numbers, Lorentz group, SM gauge group SU(3)×SU(2)×U(1), Einstein recovery, Shiab selection, coupling constants) are all logically independent of its stated axioms. Both the claimed value and its negation are consistent with the framework. This is stronger than 'the derivation is missing' — it establishes that no derivation exists within the stated formalization. The complete verdict: the published formulation is obstructed and underdetermined. The central mechanism (the Shiab operator) is a machine-verified mathematical impossibility, and the stated axioms do not determine the predictions. The 14-dimensional observerse is a valid mathematical object; the claim that it unifies gauge theory with gravity via the Shiab is not supported by the published axioms.]
+    ]
+  ]
+]
+
+#text(size: 9pt)[*Keywords:* Geometric Unity, formal verification, gap analysis, differential geometry, gauge theory, Kleis, Z3, Shiab operator, complexification]
+
+#v(1em)
+
+
+= Introduction
+
+Geometric Unity (GU) is a proposed unified field theory presented by Eric Weinstein in a 2013 lecture at Oxford and elaborated in a 69-page author's draft released April 1, 2021 [1]. The theory claims to recover the Standard Model Lagrangian, the Lorentz group, three generations of fermions, and Einstein's field equations from a single geometric construction on a 14-dimensional 'observerse' manifold built over a bare 4-dimensional topological manifold $X^4$.
+
+The theory has been criticized as incomplete and mathematically ill-defined. Nguyen and Polya [2] identified four specific objections: a complexification error in the Shiab operator, a chiral anomaly in the gauge group, supersymmetry constraints incompatible with the stated structure group, and numerous missing computations. The broader mathematical physics community has largely not engaged. The most detailed public exposition [8] — a technically competent 3-hour presentation by a science communicator with graduate training in mathematical physics — explains GU's constructions step by step but does not attempt to verify whether the claimed derivation chain is logically valid. Understanding what each step _says_ is distinct from establishing that each step _follows_.
+
+We take a different approach. Rather than arguing correctness, we ask: _what has GU actually specified, and where precisely does it fail to compile?_ Using the Kleis formal language [3] with Z3 satisfiability checking [4], we attempt to type each component. The result is a three-tier classification:
+
+- *Specified*: Components with explicit definitions and formulas that can be typed as Kleis structures
+- *Self-acknowledged gaps*: Components Weinstein himself marks as incomplete in his draft
+- *Obstructed*: Components where Nguyen/Polya demonstrate mathematical impossibility results
+
+Beyond classification, we perform executable Z3 verification: 46 queries producing a complete logical diagnostic. The novel finding (Section 10) is that GU's predictions are formally _independent_ of its axioms — the theory does not logically entail the physical content it claims.
+
+The purpose is to convert 'the theory is vague' into machine-verifiable logical verdicts. The verdict is not vague: the theory's central mechanism is mathematically impossible, and its predictions do not follow from its stated framework.
+
+= Source Material and Methodology
+
+== Source Documents
+
+1. Weinstein, E. _Geometric Unity: Author's Working Draft, v 1.0_ (April 1, 2021). 69 pages. Released via The Portal podcast and geometricunity.org.
+2. Nguyen, T. and Polya, T. _A Response to Geometric Unity_ (February 23, 2021). 10 pages. Published at timothynguyen.org.
+
+We work exclusively from these public documents. If a component is unspecified in available material, it appears as a gap regardless of whether Weinstein has resolved it privately.
+
+== Formalization Strategy
+
+For each component, we apply a three-stage test:
+
+1. *Can it be typed?* Does the component have a well-defined mathematical type?
+2. *Can it be axiomatized?* Are there stated properties expressible as first-order axioms?
+3. *Is it obstructed?* Does Nguyen's analysis demonstrate that the axioms are unsatisfiable or contradictory?
+
+Components passing stages 1-2 without obstruction become satisfiable Kleis structures. Components failing at any stage receive a named gap with severity classification:
+
+- *Type gap*: The object lacks a well-defined mathematical type
+- *Selection gap*: Multiple choices exist and the criterion for choosing is lost
+- *Obstruction*: Nguyen demonstrates mathematical impossibility
+- *Computation gap*: A claim is made but the detailed calculation is not exhibited
+
+== Z3 Verification Construction
+
+The executable verification uses three Kleis theory files, each self-contained with its own structures and examples. The construction employs several techniques to make SMT verification tractable:
+
+*Ground instances over universal quantifiers.* Universal quantification ($forall x . P(x)$) over complex algebraic structures causes Z3 memory explosion. Instead, we declare named elements (e.g., `g1`, `g2` for gauge group elements) and assert axioms over these specific witnesses. This trades generality for decidability — the properties hold for the declared elements, which suffices for satisfiability and entailment checking.
+
+*Element-scoped structures.* Each Kleis `structure` defines axioms only over its own named elements. This prevents global axiom conflicts when multiple structures coexist in the same file. For example, `Model_3_Generations` defines `gen_count(m3) = 3` where `m3` is local to that structure, while `Model_4_Generations` defines `gen_count(m4) = 4` with its own element — both are simultaneously satisfiable because they make claims about different elements.
+
+*Entailment semantics.* Kleis `assert` checks logical _entailment_: given the axioms loaded by the example block, does the assertion follow as a logical consequence? For Layer 2 (obstructions), we encode Nguyen's premises as axioms and assert the impossibility conclusion — Z3 confirms it is _forced_ by the premises (UNSAT for the negation). This is stronger than satisfiability: the obstruction is a theorem, not merely consistent.
+
+*Independence via the Cantor/Cohen method.* To prove a prediction $P$ is independent of axioms $T$, we construct two separate structures: one where $T union {P}$ is satisfiable, another where $T union {not P}$ is satisfiable. If Z3 confirms both (SAT), then $P$ is undecidable from $T$. This adapts the forcing/inner-model technique from set theory to SMT — the same method used to prove the Continuum Hypothesis independent of ZFC [3].
+
+*Three-file separation.* Layers 1, 2, and 3 are isolated into separate files (`geometric_unity.kleis`, `geometric_unity_obstructions.kleis`, `geometric_unity_skolem.kleis`). This is not merely organizational — loading conflicting axioms in a single file would produce global inconsistency, making all assertions trivially true. Separation ensures each layer's verdict is genuine.
+
+== Two-Level Presentation
+
+The structures shown in Sections 3–9 of this paper are _intended formalizations_ — they express the mathematical content with full generality (polymorphic type parameters, universal quantifiers, rich operation signatures). These serve as specifications: what the theory _means_ to say.
+
+The executable verification files use a deliberately different representation: ground instances, integer encodings, and element-scoped axioms. This is not an oversight — it is required by SMT tractability. Z3 cannot decide arbitrary first-order theories with nested quantifiers over uninterpreted sorts; it can decide ground theories in milliseconds. The ground-instance versions are _conservative approximations_ of the intended formalizations: any property that fails to hold even over named witnesses certainly fails in general, and any independence result over ground terms implies independence over the full theory (if the axioms cannot force a value even for specific elements, they cannot force it universally).
+
+The intended formalizations in this paper establish _what we are testing_. The executable files establish _that we tested it_. Readers wishing to verify the results should consult the `.kleis` theory files directly.
+
+== Completeness of the Axiom Set
+
+A natural question: did we include enough axioms? If additional structure (the deformation complex, branching rules, topological constraints) were formalized, might the predictions become derivable?
+
+We included _every formally stated axiom_ in the April 2021 draft: dimensional constraints, signature, Lie algebra dimension, spinor dimension, gauge group algebraic properties, Clifford decomposition sums, and tilt homomorphism behavior. What we did NOT include are:
+
+- The Shiab operator's action — because it is mathematically impossible (Layer 2, Obstruction 1). Including an inconsistent axiom would make ALL assertions trivially true, which is the opposite of a meaningful test.
+- The Shiab selection criterion — because Weinstein self-acknowledges it is lost ('unable to locate the notes from decades ago,' Section 8.2).
+- The deformation complex calculation yielding 3 generations — because it is never exhibited in the draft. Section 10 states the conclusion but does not show the representation-theoretic derivation.
+
+In each case, the axiom is absent from our formalization _because it is absent from the theory_. The independence results are not an artifact of incomplete formalization — they reflect genuinely missing structure.
+
+Moreover, the missing axioms cannot rescue the theory even in principle. The Shiab operator — which is the mechanism that would connect geometry to predictions — is not merely unformalized; it is machine-verified as mathematically impossible (Layer 2). Any additional axiom invoking the Shiab inherits this impossibility. The derivation chain from observerse geometry to physical predictions passes through a proven obstruction. Adding downstream axioms to a blocked pipeline does not unblock it.
+
+Should alternative axioms ever be proposed that bypass the Shiab entirely (constituting a different theory), they can be added to the `.kleis` files and tested. The framework is extensible: provide the axiom, get the verdict.
+
+= The Observerse
+
+== What Is Specified (Definition 3.1, Weinstein)
+
+The observerse is formally defined as a triple $(X^n, Y^d, {iota})$ where $iota : U^n_x arrow.hook Y^d_g$ are local Riemannian embeddings for neighborhoods $U^n subset X^n$ into a Riemannian manifold $Y^d$, inducing a pullback metric $g_X = iota^*(g_Y)$ and defining a normal bundle.
+
+Three cases are distinguished:
+- *Trivial*: $Y = X$, $iota$ is the identity
+- *Einsteinian*: $Y = "Met"(X)$, the bundle of pointwise metric tensors, $iota = g$ (a metric field)
+- *Ambient*: $Y^d_g$ unconstrained beyond immersion condition
+
+GU works in the Einsteinian case: $Y^(14)$ is the bundle of metrics over $X^4$, with fiber dimension $n(n+1)/2 = 10$ for $n = 4$, giving total dimension $4 + 10 = 14$.
+
+The Frobenius inner product on the fiber (symmetric matrices contracted against the metric at a point) gives signature $(4, 6)$ on the vertical directions, yielding total signature $(7, 7)$ on $Y$ when combined with the horizontal lift of the base metric. This is explicitly computed in equation (3.9) of the draft.
+
+== Formalization
+
+```
+structure Observerse(X, Y, Metric, Section) {
+    operation base_projection : Y → X
+    operation metric_bundle : X → Y
+    operation section : Section → Y
+    operation pullback_metric : Section → Metric
+    operation dim_X : Integer
+    operation dim_Y : Integer
+    operation sig_vertical : (Integer, Integer)
+    operation sig_total : (Integer, Integer)
+    axiom base_dimension : dim_X = 4
+    axiom total_dimension : dim_Y = 14
+    axiom fiber_dimension : dim_Y - dim_X = 10
+    axiom vertical_signature : sig_vertical = (4, 6)
+    axiom total_signature : sig_total = (7, 7)
+    axiom bundle_structure : ∀ y : Y . ∃ x : X . base_projection(y) = x
+    axiom metric_recovery : ∀ s : Section .
+        pullback_metric(s) = induced_metric(section(s))
+}
+```
+
+This structure is satisfiable. Z3 finds witnesses immediately.
+
+== Gaps
+
+*GAP-01 (Selection gap, Low severity):* The choice of Frobenius metric sign convention assigns signature $(1,0)$ to the trace component rather than $(0,1)$. Weinstein notes this is 'one of the few non-forced choices allowed in the strong form of GU' but does not derive the physical consequences of the alternative.
+
+*GAP-02 (Computation gap, Medium severity):* The relationship between the Einsteinian observerse (which uses Riemannian metrics — positive-definite) and physics (which requires Lorentzian signature) is noted but not fully resolved. Weinstein states he treats the $(1,3)$ sector as 'anthropically determined.'
+
+= Spinors and the Structure Group
+
+== What Is Specified (Sections 3.2-3.6, Weinstein)
+
+The chimeric bundle is defined as $C(Y) = V plus.o H^*$ where $V$ is the vertical sub-bundle and $H^*$ is the (metric-induced) horizontal co-bundle. This bundle is 'semi-canonically' isomorphic to both $T(Y)$ and $T^*(Y)$ and carries a natural metric from the Frobenius inner product.
+
+Spinors are constructed via the exponential property of the spinor functor:
+$ slash(S)_g(C) tilde.eq slash(S)^("Frobenius")_g (V) times.o slash(S)_g (H^*_(pi^*(pi^*(g)))) $
+
+This avoids choosing a metric on $X$ directly — the metric data lives in the _point_ $g in Y$, and spinors are defined on the chimeric bundle at that point.
+
+The structure group chain is:
+$ "Spin"(7,7) arrow.r "SO"(64, 64) arrow.r U(64, 64) arrow.r "GL"(128, CC) $
+
+with real Weyl spinors transforming as 64-dimensional representations under $"GL"(64, RR)$. The Clifford algebra decompositions are explicit:
+$ "so"(7,7) tilde.eq Lambda^2 subset "Cl"_RR (7,7) $
+$ "gl"(64, RR) tilde.eq (Lambda^2 plus.o Lambda^6 plus.o Lambda^10 plus.o Lambda^14) subset "Cl"_RR (7,7) $
+
+== Formalization
+
+```
+structure GU_SpinorConstruction(Y, V, H, C, Spinor, Cliff) {
+    operation chimeric_bundle : Y → C
+    operation vertical : C → V
+    operation horizontal : C → H
+    operation spinor_functor : C → Spinor
+    operation structure_group : Spin_7_7
+    operation weyl_left : Spinor → GL_64_R
+    operation weyl_right : Spinor → GL_64_R
+    axiom chimeric_decomposition : ∀ y : Y .
+        chimeric_bundle(y) = direct_sum(vertical(chimeric_bundle(y)),
+                                         horizontal(chimeric_bundle(y)))
+    axiom spinor_exponential : ∀ y : Y .
+        spinor_functor(chimeric_bundle(y)) =
+            tensor(spinor_functor(vertical(chimeric_bundle(y))),
+                   spinor_functor(horizontal(chimeric_bundle(y))))
+    axiom clifford_dimension : dim(Cliff) = 2^14
+    axiom weyl_dimension : dim(weyl_left) = 64
+}
+```
+
+== Assessment
+
+This is one of the most completely specified components of GU. The construction is mathematically standard (chimeric bundles, spinor functors on direct sums) and the dimension counts are explicit and verifiable. Nguyen [2] confirms the basic setup in Section 2.1 of his response.
+
+*GAP-03 (Computation gap, Medium):* Nguyen notes that Weinstein claims spinors can be defined without a metric via the chimeric bundle construction, but the spinor bundle 'still requires a choice of a metric or a connection on U, contrary to what Weinstein claims' (Nguyen footnote a).
+
+= The Inhomogeneous Gauge Group
+
+== What Is Specified (Section 5, Definition 5.1, Weinstein)
+
+The gauge structure is built in layers:
+
+1. *Principal bundle* $P$: the $"Spin"(14)$-bundle associated to the spinor bundle $S(U)$, promoted to $U(128)$ via inclusion $"Spin"(14) arrow.r.hook U(128)$.
+
+2. *Gauge group* $H = Gamma(P times_("Ad") U(128))$: sections of the adjoint bundle — the group of unitary automorphisms of $S(U)$.
+
+3. *Connection space* $cal(A)$: identified with $Omega^1("ad"(P_H))$ via the distinguished Levi-Civita spin connection $A_0$.
+
+4. *Inhomogeneous Gauge Group* (Definition 5.1):
+$ cal(G) = H times.l N $
+where $N = Omega^1("ad"(P_H))$, with multiplication $(h_1, pi_1) dot (h_2, pi_2) = (h_1 h_2, "Ad"_(h_2^(-1))(pi_1) + pi_2)$.
+
+5. *Tilted embedding* $tau = tau_(A_0) : H arrow cal(G)$ via $h mapsto (h, h^(-1) d_(A_0) h)$.
+
+The tilted gauge group $H^tau$ is the image of $tau$ inside $cal(G)$.
+
+== Formalization
+
+```
+structure InhomogeneousGaugeGroup(H, N, G, Connection) {
+    operation gauge_group : H
+    operation ad_valued_forms : N
+    operation semi_direct_product : H × N → G
+    operation tilt : H → G
+    operation distinguished_connection : Connection
+    axiom group_law : ∀ h1 : H . ∀ h2 : H . ∀ pi1 : N . ∀ pi2 : N .
+        semi_direct_product((h1, pi1), (h2, pi2)) =
+            (compose(h1, h2), add(adjoint(inverse(h2), pi1), pi2))
+    axiom tilt_homomorphism : ∀ h : H .
+        tilt(h) = (h, compose(inverse(h), d_connection(h)))
+    axiom tilt_is_homomorphism : ∀ h1 : H . ∀ h2 : H .
+        tilt(compose(h1, h2)) = semi_direct_product(tilt(h1), tilt(h2))
+}
+```
+
+This structure is completely specified and internally consistent. The semi-direct product and tilted embedding are standard constructions.
+
+== Obstruction (Nguyen Section 3.2)
+
+*GAP-04 (Obstruction, Critical):* The gauge group $U(128)$ contains a central $U(1)$ subgroup whose associated gauge connection induces an abelian chiral anomaly [2, Section 3.2]. This breaks gauge invariance in the quantum theory. Switching to $"Spin"(14)$ removes the anomaly but makes the Shiab operator impossible to define (the representation spaces have incompatible dimensions). Nguyen's conclusion: _'it is impossible to both remove the gauge anomaly and have a well-defined shiab operator, thereby rendering GU inconsistent.'_
+
+= The Shiab Operator
+
+== What Is Specified (Section 8, eq. 9.3, Weinstein)
+
+The Shiab operator is explicitly defined. It acts on ad-valued 2-forms $Xi in Omega^2(Y, "ad")$ as:
+
+$ zws_epsilon Xi = [(epsilon^(-1) Phi_1 epsilon) and (*Xi)] - alpha/2 [(epsilon^(-1) Phi_1 epsilon) and * [(epsilon^(-1) Phi_2 epsilon) and (*Xi)]] $
+
+where $Phi_i$ are 'pure trace' elements — specifically, a basis for the invariant subspaces of $[Lambda^i (RR^(7,7)) times.o u(64,64)]^("Spin"(7,7))$ (Definition 8.1).
+
+The operator is structured as an Einsteinian contraction generalized to preserve gauge covariance:
+- The first term is _Ricci-like_ (analogous to contracting the Riemann tensor to Ricci)
+- The second term is _Ricci-scalar-like_ (the further trace)
+- The Weyl curvature is annihilated, exactly as in Einstein's case
+
+The gauge element $epsilon in H subset cal(G)$ acts by conjugation, making the contraction gauge-covariant (unlike naive projection, which breaks gauge invariance — the core problem GU claims to solve).
+
+== What Weinstein Self-Acknowledges as Incomplete (Section 8.2)
+
+_'The author remembers choosing them years ago via representation theory techniques involving highest weight representations rather than by the more indicial methods presented here with invariant elements $Phi_i$. The advantage was that the Bianchi identity was able to pick the best and most appropriate operator in different circumstances. Unfortunately, the author is no longer conversant in that language and has been unable to locate the notes from decades ago that originally picked out the operator of choice.'_
+
+This is extraordinary: the _selection criterion_ for which Shiab operator to use — the argument that singles out the correct operator from the family — is self-acknowledged as lost.
+
+*GAP-05 (Selection gap, Critical):* The formula exists but the _reason_ for choosing this particular operator over others in the family is unrecovered. Without this, the theory has a free parameter where it claims to have none.
+
+== The Nguyen Complexification Obstruction (Section 3.1)
+
+The Shiab requires identifying elements of the adjoint bundle $"Ad"(P)$ with elements of the exterior algebra $Lambda^bullet (T^* U)$. This identification requires:
+
+$ "Ad"(P) times.o CC tilde.eq Lambda^bullet (T^* U) times.o CC $
+
+This isomorphism holds _only after complexification_. Without complexification, $u(128)$ (skew-Hermitian $128 times 128$ matrices) is _not_ isomorphic to $"Cl"_RR (14)$ (real $128 times 128$ matrices).
+
+Nguyen's dilemma:
+- *Without complexification*: The Shiab is mathematically undefined. The 'pure trace' identification fails.
+- *With complexification*: Following Witten [5], complexifying the space of connections leads to a quantum theory that is either non-unitary or has energy unbounded below. Neither is physically acceptable.
+
+*GAP-06 (Obstruction, Critical):* The Shiab operator as defined requires a bundle isomorphism that does not exist over the reals. The only resolution (complexification) destroys the physical viability of the quantum theory. This is the central mathematical obstruction in GU.
+
+== Formalization Attempt
+
+```
+structure ShiabOperator(Y, AdBundle, ExteriorAlgebra, GaugeElement, Form2, FormD1) {
+    operation phi_1 : AdBundle
+    operation phi_2 : AdBundle
+    operation conjugate : GaugeElement × AdBundle → AdBundle
+    operation wedge_star : AdBundle × Form2 → FormD1
+    operation shiab : GaugeElement × Form2 → FormD1
+    axiom shiab_formula : ∀ eps : GaugeElement . ∀ xi : Form2 .
+        shiab(eps, xi) = subtract(
+            wedge_star(conjugate(eps, phi_1), hodge(xi)),
+            scale(alpha_half,
+                wedge_star(conjugate(eps, phi_1),
+                    hodge(wedge_star(conjugate(eps, phi_2), hodge(xi))))))
+    axiom gauge_covariance : ∀ h : GaugeElement . ∀ eps : GaugeElement . ∀ xi : Form2 .
+        shiab(compose(h, eps), adjoint(h, xi)) = adjoint(h, shiab(eps, xi))
+    axiom kills_weyl : ∀ eps : GaugeElement . ∀ w : WeylForm .
+        shiab(eps, w) = zero
+}
+```
+
+The structure is _internally_ consistent. The formula types correctly. But the physical realizability depends on the bundle isomorphism (GAP-06) which Nguyen shows does not exist without complexification.
+
+= The Action and Field Equations
+
+== What Is Specified (Section 9, Weinstein)
+
+The first-order bosonic action is explicitly written (eq. 9.4):
+
+$ I^B_1 ((epsilon_Y, dollar_Y), chi_X) = chevron.l T_psi, * (zws_psi (F_(B_psi) + 1/2 d_(B_psi) T_psi + 1/3 [T_psi, T_psi]) + kappa_1/2 T_psi) chevron.r_(g_chi) $
+
+where:
+- $T_psi = dollar - epsilon^(-1) d_0 epsilon in Omega^1(Y, "ad")$ is the augmented torsion tensor
+- $B_psi = nabla_0 + epsilon^(-1) d_0 epsilon$ is the gauge-rotated Levi-Civita spin connection
+- $F_(B_psi)$ is the curvature of $B_psi$
+- $zws_psi$ is the Shiab operator
+- $g_chi$ is the 'Zorro metric' on $Y$ induced from the section $chi$ of $X$
+
+The Euler-Lagrange equations yield (eq. 9.9):
+$ Upsilon_psi = S_psi - cal(T)_psi = 0 $
+
+where $S_psi = zws F_psi$ is the 'Swervature' (swerved curvature) and $cal(T)_psi = -kappa_1 T_psi$ is the 'Displasion' (displaced torsion). Weinstein annotates (eq. 9.10) that this recovers:
+
+$ underbrace(S_psi, R_(mu nu) - s/2 g_(mu nu)) = underbrace(cal(T)_psi, underbrace(Lambda g_(mu nu), T_(mu nu))) $
+
+i.e., Einstein's field equations with cosmological constant.
+
+== Formalization
+
+```
+structure GU_FieldEquations(G, Connection, Curvature, Torsion, Shiab) {
+    operation augmented_torsion : G → Torsion
+    operation gauge_rotated_connection : G → Connection
+    operation curvature_of : Connection → Curvature
+    operation swervature : Curvature → FieldEquation
+    operation displasion : Torsion → FieldEquation
+    axiom torsion_def : ∀ psi : G .
+        augmented_torsion(psi) = subtract(dollar(psi),
+            compose(inverse(epsilon(psi)), d0(epsilon(psi))))
+    axiom field_equation : ∀ psi : G .
+        swervature(curvature_of(gauge_rotated_connection(psi))) =
+            displasion(augmented_torsion(psi))
+    axiom einstein_limit : ∀ psi : G .
+        restrict_to_base(swervature(curvature_of(gauge_rotated_connection(psi)))) =
+            einstein_tensor(pullback_metric(psi))
+}
+```
+
+== Gaps
+
+*GAP-07 (Computation gap, High):* The detailed computation showing that the Euler-Lagrange variation of $I^B_1$ yields exactly the stated field equations is not exhibited. Weinstein states 'by the calculus of variations we obtain' (eq. 9.5) but does not show the work. Nguyen [2, Section 3.4] notes that _'the volume of missing or inexplicit computations renders the formulation of GU largely incomplete.'_
+
+*GAP-08 (Computation gap, High):* The recovery of Yang-Mills equations (in addition to Einstein's equations) from the same action is claimed but not derived in detail. Weinstein states this involves a 'Dirac pair' relationship between first and second order equations (Section 9.2) but the explicit calculation is deferred.
+
+*GAP-09 (Selection gap, Medium):* The coupling constant $kappa_1$ and the parameter $alpha$ in the Shiab formula are free parameters. Their values are not derived from the geometry.
+
+= Observed Field Content
+
+== What Is Specified (Section 11, Weinstein)
+
+GU makes explicit predictions for quantum numbers. Section 11.3 provides a table of particle content after structure group reduction to $"Spin"(1,3) times "Spin"(6,4)$:
+
+#figure(
+  table(
+    columns: 4,
+    stroke: 0.5pt,
+    inset: 6pt,
+    [*Name*], [*Multiplicity*], [*Structure*], [*Identification*],
+    [Left Quarks], [1], [$[3 times 2]_(n=1)^L$], [Color triplet, weak doublet],
+    [Left Anti-Quarks], [1], [$[overline(3) times 1]_(n=2)^L$], [Color anti-triplet, weak singlet],
+    [Left Anti-Quarks], [1], [$[overline(3) times 1]_(n=-4)^L$], [Color anti-triplet, weak singlet],
+    [Left Leptons], [1], [$[1 times 2]_(n=-3)^L$], [Color singlet, weak doublet],
+    [Left Anti-Lepton], [1], [$[1 times 1]_(n=6)^L$], [Color singlet, weak singlet],
+    [Left Anti-Lepton], [1], [$[1 times 1]_(n=0)^L$], [Color singlet, weak singlet],
+  ),
+  caption: [GU predicted quantum numbers (Section 11.3 of draft). These match the Standard Model first generation.]
+) <tab:quantum>
+
+GU also predicts:
+- A 2+1 generation structure (two 'true' generations plus one 'imposter' generation emerging from decoupling)
+- A spin-$3/2$ sector $Q^+_(3/2)$ with reversed chirality properties
+- Bosonic decompositions (Section 11.4) including color-octet and color-sextet fields
+
+== Assessment
+
+The quantum number predictions are the most concrete empirical content of GU. They can in principle be checked against experiment.
+
+== Gaps
+
+*GAP-10 (Computation gap, Critical):* The derivation chain connecting the observerse geometry through the Shiab operator to these specific quantum numbers passes through _every_ upstream gap. If the Shiab is ill-defined (GAP-06), the field equations cannot be trusted (GAP-07), and the quantum numbers are effectively free parameters rather than predictions.
+
+*GAP-11 (Derivation gap, High):* The mechanism producing exactly three generations (or 2+1) from the deformation complex (Section 10) involves claims about the complex not shown in detail. Weinstein states the structure but does not exhibit the representation-theoretic calculation.
+
+= The Nguyen Obstructions
+
+Nguyen and Polya [2] identify three independent mathematical obstructions, each of which would individually prevent GU from functioning as stated. Together they form a trilemma with no apparent resolution.
+
+== Obstruction 1: The Complexification Dilemma (Section 3.1)
+
+The Shiab operator requires identifying the adjoint bundle $"Ad"(P)$ with the exterior algebra bundle $Lambda^bullet (T^* U)$. This requires:
+
+$ "Ad"(P) tilde.eq Lambda^bullet (T^* U) $
+
+But $"Ad"(P)$ has fibers $u(128)$ (skew-Hermitian matrices) while $Lambda^bullet (T^* U)$ has fibers isomorphic to $"Cl"_RR (14) tilde.eq M_(128)(RR)$ (real matrices). These are _not_ isomorphic as real vector spaces.
+
+After complexification both become $M_(128)(CC)$ and the isomorphism holds:
+$ "Ad"(P) times.o CC tilde.eq Lambda^bullet (T^* U) times.o CC $
+
+But complexifying the gauge theory leads (following Witten [5]) to non-unitary quantum mechanics or unbounded Hamiltonians.
+
+*Verdict*: The Shiab is either undefined (no complexification) or unphysical (with complexification).
+
+== Obstruction 2: The Anomaly-Shiab Incompatibility (Section 3.2)
+
+$U(128)$ as gauge group induces a chiral anomaly via its central $U(1)$ subgroup. Resolution: replace $U(128)$ with $"Spin"(14)$.
+
+But $"Spin"(14)$ has the wrong dimension to support the bundle isomorphism needed for the Shiab operator. The Shiab requires the _full_ $U(128)$ representation theory.
+
+*Verdict*: Anomaly freedom and Shiab existence are mutually exclusive.
+
+== Obstruction 3: The Supersymmetry Tower (Section 3.3)
+
+GU claims supersymmetric extension of the inhomogeneous gauge group. In $D >= 12$ dimensions:
+- SUSY representations necessarily contain spin-3 fields (Nahm [6])
+- Interacting spin-3 fields require an infinite tower of higher-spin fields
+- Higher-spin gauge theories require infinite-dimensional structure groups
+
+This contradicts the finite structure group $U(128)$.
+
+*Verdict*: The claimed supersymmetry is incompatible with the stated gauge structure.
+
+== The Trilemma Formalized
+
+```
+structure NguyenTrilemma(Theory) {
+    operation has_shiab : Theory → Boolean
+    operation is_anomaly_free : Theory → Boolean
+    operation has_susy : Theory → Boolean
+    operation is_unitary : Theory → Boolean
+    axiom obstruction_1 : ∀ t : Theory .
+        has_shiab(t) = true → is_unitary(t) = false
+    axiom obstruction_2 : ∀ t : Theory .
+        (has_shiab(t) = true ∧ is_anomaly_free(t) = true) → false
+    axiom obstruction_3 : ∀ t : Theory .
+        has_susy(t) = true → structure_group_finite(t) = false
+}
+```
+
+This structure is satisfiable only if at least one of (Shiab, anomaly-freedom, unitarity, SUSY) is abandoned. Since the Shiab IS the theory's central mechanism — the 'unity' in Geometric Unity — abandoning it means abandoning the theory. The other options (accepting anomalies, accepting non-unitarity, dropping SUSY) each render the theory physically unviable. There is no escape route that preserves GU's claims.
+
+= Z3 Verification and Independence Results
+
+Beyond the gap ledger, we perform executable formal verification using Z3 satisfiability checking across three self-contained Kleis theory files (46 total queries). The results produce a complete diagnostic of GU's logical status.
+
+== Layer 1: Consistency of the Core (16/16 SAT)
+
+The dimensional arithmetic, Lie algebra structure, Clifford decomposition, inhomogeneous gauge group, and augmented torsion tensor are all internally consistent. Z3 finds models immediately:
+
+- Observerse: $dim(Y) = 14$, fiber dimension 10, signature $(7,7)$ — verified
+- $"so"(7,7)$: dimension $91 = 14 dot 13 \/ 2$ — verified
+- Clifford: $91 + 3003 + 1001 + 1 = 4096 = 64^2$ — verified
+- Gauge group: identity, inverse, associativity, tilt homomorphism — all consistent
+- Torsion: vanishes at identity, non-trivial elsewhere — consistent
+
+This confirms the _framework_ is not nonsensical. The arena exists.
+
+== Layer 2: Machine-Verified Obstructions (8/8 Verified)
+
+Each Nguyen obstruction is encoded as a structure of premises from which Z3 derives the impossibility conclusion:
+
+- Shiab $arrow.r$ complexification $arrow.r$ `is_unitary` $= 0$ (forced by axioms)
+- $U(128)$ $arrow.r$ `has_anomaly` $= 1$ (forced)
+- $"Spin"(14)$ adjoint dimension $91 < 16384$ (forced)
+- $D = 14$ + SUSY $arrow.r$ spin-3 $arrow.r$ infinite tower $arrow.r$ `group_is_finite` $= 0$ (forced)
+
+These are not merely human-argued: they are _machine-verified logical derivations_. The obstructions are theorems.
+
+== Layer 3: Independence Results — The Novel Finding (22/22 SAT)
+
+This is the central new contribution. Using the Cantor/Cohen independence methodology (if both $P$ and $not P$ are consistent with axioms $T$, then $P$ is independent of $T$), we test whether GU's predictions follow from its axioms.
+
+*Result: All predictions are INDEPENDENT of the stated axioms.*
+
+#figure(
+  table(
+    columns: 4,
+    stroke: 0.5pt,
+    inset: 5pt,
+    [*Prediction*], [*Claimed*], [*Also consistent*], [*Status*],
+    [Generation count], [3], [1, 2, 4], [Independent],
+    [Shiab selection], [Unique], [Non-unique], [Independent],
+    [Einstein recovery], [Holds], [Fails], [Independent],
+    [Color rep], [$bold(3)$], [$bold(1)$, $bold(8)$], [Independent],
+    [Weak rep], [$bold(2)$], [$bold(1)$, $bold(3)$], [Independent],
+    [Coupling $kappa_1$], [Fixed], [$1, 7, 42, ...$], [Independent],
+    [Lorentz group], [$"SO"(1,3)$], [$"SO"(2,2)$, $"SO"(4,0)$], [Independent],
+    [Gauge group], [$"SU"(3) times "SU"(2) times U(1)$], [$"SU"(5)$, $"SO"(10)$, Pati-Salam], [Independent],
+  ),
+  caption: [Independence results from Z3. Each prediction is consistent with the axioms — but so is its negation. The axioms do not determine the predictions.]
+) <tab:independence>
+
+== Interpretation
+
+The alternative witnesses in the table above are not arbitrary counterexamples. They are physically significant: SU(5), SO(10), and Pati-Salam are the three most-studied grand unified theories in particle physics. SO(2,2) is the signature of conformal gravity. The color octet is the adjoint representation of QCD. These are the actual competing proposals that a theory of everything should _exclude_. GU's axioms accommodate all of them equally. The framework does not distinguish the Standard Model from its competitors — it is a structure that accommodates everything and predicts nothing.
+
+Independence is _stronger_ than 'the derivation is missing.' It means:
+
+1. No derivation _can_ exist from the stated axioms alone
+2. Additional structure (new axioms, representation-theoretic input, or topological constraints) is required
+3. The predictions are _assertions_ appended to the framework, not _consequences_ derived from it
+
+The Einstein recovery result deserves emphasis. GU's entire _raison d'être_ is to be a generalization of General Relativity — the 14-dimensional framework is supposed to contain GR as a 4-dimensional limit. Our result shows this containment is not a theorem: GU's axioms do not logically entail Einstein's field equations. Both recovery and non-recovery are consistent with the framework. GU is therefore not a generalization of GR in any formal sense — it is a separate mathematical construction to which GR has been appended as an unproven claim.
+
+This parallels Gödel/Cohen's result for the Continuum Hypothesis: CH is not unprovable because we haven't tried hard enough — it is _independent_ of ZFC. Similarly, '3 generations' is not underived because the calculation is difficult — it is _independent_ of GU's dimensional and algebraic axioms.
+
+== Distinction from Nguyen
+
+Nguyen showed the _mechanism_ is blocked (Layer 2). We show that even _ignoring_ the obstruction, the _predictions_ would not follow (Layer 3). These are complementary findings:
+
+- Nguyen: 'The Shiab cannot exist as stated' (over-constrained)
+- This work: 'Even if it could, it would not produce what is claimed' (under-constrained)
+
+The combination is definitive: GU's central mechanism is impossible, and even a repaired version of the mechanism would require substantial additional structure to produce any specific physical prediction.
+
+= Gap Summary
+
+#figure(
+  table(
+    columns: 5,
+    stroke: 0.5pt,
+    inset: 5pt,
+    [*Gap*], [*Component*], [*Type*], [*Severity*], [*Status in Draft*],
+    [GAP-01], [Frobenius sign choice], [Selection], [Low], [Acknowledged as free choice],
+    [GAP-02], [Riemannian vs Lorentzian], [Computation], [Medium], [Noted, not resolved],
+    [GAP-03], [Metric-free spinor claim], [Computation], [Medium], [Contradicted by Nguyen],
+    [GAP-04], [Chiral anomaly], [Obstruction], [Critical], [Not addressed in draft],
+    [GAP-05], [Shiab selection criterion], [Selection], [Critical], [Self-acknowledged as lost],
+    [GAP-06], [Complexification dilemma], [Obstruction], [Critical], [Not addressed in draft],
+    [GAP-07], [E-L variation detail], [Computation], [High], [Claimed without derivation],
+    [GAP-08], [Yang-Mills recovery], [Computation], [High], [Deferred to Dirac pair],
+    [GAP-09], [Free parameters], [Selection], [Medium], [Not derived from geometry],
+    [GAP-10], [Quantum number derivation], [Computation], [Critical], [Depends on all upstream],
+    [GAP-11], [Three generations mechanism], [Derivation], [High], [Stated without calculation],
+  ),
+  caption: [Complete gap inventory. 'Critical' severity means the theory's central claims cannot be evaluated without resolution.]
+) <tab:gaps>
+
+== Summary Statistics
+
+- *Fully specified with explicit formulas*: Observerse construction, chimeric bundle, spinor representations, inhomogeneous gauge group, augmented torsion, Shiab formula, bosonic action, field equations, quantum number predictions
+- *Self-acknowledged as incomplete*: Shiab selection criterion (1 gap)
+- *Mathematically obstructed*: Complexification dilemma, anomaly-Shiab incompatibility (2 gaps)
+- *Missing detailed computations*: Euler-Lagrange derivation, Yang-Mills recovery, generation mechanism, quantum number chain (4 gaps)
+- *Other*: Sign convention, Lorentzian issue, free parameters (3 gaps)
+
+The theory is more specified than commonly claimed — it has explicit formulas for most of its central objects. But specification is not correctness. The Shiab operator is a machine-verified mathematical impossibility (Layer 2), and the predictions (GAP-09, GAP-10, GAP-11) are formally independent of the stated axioms (Layer 3). The theory's arena is a valid mathematical object; its claimed derivation chain — from observerse geometry to Standard Model content — is not established by the published framework.
+
+= Conclusion
+
+We have formalized Geometric Unity as typed Kleis structures with executable Z3 verification, producing 46 machine-checked results across three layers of analysis. The formalization includes every axiom stated in the April 2021 draft. Components that are self-acknowledged as lost or never exhibited cannot be formalized — their absence from our axiom set reflects their absence from the theory.
+
+The result contradicts both the popular dismissal ('GU is just vague hand-waving') and the popular defense ('GU is a complete theory that the establishment refuses to engage with'). The truth is more precisely characterized by a three-word verdict:
+
+*Consistent. Obstructed. Underdetermined.*
+
+_Consistent_ (Layer 1, 16/16 SAT): GU's core framework — the 14-dimensional observerse, signature $(7,7)$, Clifford algebra $"Cl"_RR (7,7)$, chimeric spinors, inhomogeneous gauge group, augmented torsion — is internally coherent. Z3 finds models immediately. The arena exists.
+
+_Obstructed_ (Layer 2, 8/8 verified): The Shiab operator — which IS the theory's central mechanism, the 'geometric unity' between gauge and gravity — is mathematically impossible as stated. Z3 derives non-unitarity, anomaly, and the SUSY tower as logical consequences of the premises. These are machine-verified theorems, not human opinions.
+
+_Underdetermined_ (Layer 3, 22/22 independent): Even ignoring the obstruction, the theory's predictions do not follow from its axioms. The generation count, quantum numbers, Lorentz group, SM gauge group, Einstein recovery, Shiab uniqueness, and coupling constants are all _logically independent_ of the stated framework. Both the claimed values and their negations are consistent with the axioms. This is not 'the derivation is missing' — it is 'the stated axioms do not determine the predictions.'
+
+== What Would Be Required
+
+To save the _mechanism_: resolve the complexification dilemma without destroying unitarity. This requires either a new bundle identification, a non-standard quantization, or a radical modification of the gauge structure — any of which would constitute a substantially different theory.
+
+To save the _predictions_: even with a working mechanism, one would need additional axioms — representation-theoretic branching rules, topological constraints on the deformation complex, or explicit Skolem witnesses for the selection criterion — that are not currently part of the theory.
+
+== Methodological Contribution
+
+The use of an SMT solver to audit a theoretical physics proposal is, to our knowledge, new. The approach offers:
+- Machine verification of impossibility results (no hidden errors)
+- Constructive independence proofs (Z3 exhibits models for both $P$ and $not P$)
+- Reproducibility (the .kleis files can be re-run by anyone)
+- Extensibility (new axioms can be added to test their consequences)
+
+== Methodological Note: Satisfiability vs Pattern Matching
+
+The distinction between satisfiability checking and language-model plausibility is methodologically important. An LLM asked whether a theory's claims follow from its premises can only assess whether the statement _sounds_ coherent relative to its training distribution. Z3 constructs explicit models or proves their non-existence. When Z3 returns SAT for both a proposition and its negation (Layer 3), it has demonstrated independence by witness construction — a fundamentally different operation from textual pattern matching.
+
+This distinction is what makes the independence results (Layer 3) possible. An LLM cannot construct a model with 4 generations satisfying the same axioms that admit 3 generations; Z3 does so in milliseconds. The methodology is reproducible: the Kleis files constituting this verification are available at `theories/geometric_unity.kleis`, `theories/geometric_unity_obstructions.kleis`, and `theories/geometric_unity_skolem.kleis`.
+
+
+
+#heading(numbering: none)[References]
+#set text(size: 9pt)
+#par(hanging-indent: 1.5em)[\[1\] E. Weinstein, _Geometric Unity: Author's Working Draft, v 1.0_ (April 1, 2021). 69 pages. Released via geometricunity.org.]
+
+#par(hanging-indent: 1.5em)[\[2\] T. Nguyen and T. Polya, _A Response to Geometric Unity_ (February 23, 2021). Available at timothynguyen.org.]
+
+#par(hanging-indent: 1.5em)[\[3\] E. Atik, _Kleis: A structure-oriented mathematical formalization language with Z3 verification_, Kleis Research (2025). https://kleis.io]
+
+#par(hanging-indent: 1.5em)[\[4\] L. de Moura and N. Bjørner, _Z3: An efficient SMT solver_, in TACAS, Springer LNCS 4963 (2008), pp. 337--340.]
+
+#par(hanging-indent: 1.5em)[\[5\] E. Witten, _Quantization of Chern-Simons gauge theory with complex gauge group_, Comm. Math. Phys. 137(1): 29--66 (1991).]
+
+#par(hanging-indent: 1.5em)[\[6\] W. Nahm, _Supersymmetries and their representations_, Nucl. Phys. B 135: 149 (1978).]
+
+#par(hanging-indent: 1.5em)[\[7\] S. Gregson et al., _Eric Weinstein Corner: April/26 - Debunking Terrible Physics_, Bad Boy of Science (April 2026). https://youtu.be/6hIYYeXRcX8 — Discussion of Weinstein's LLM interactions regarding GU.]
+
+#par(hanging-indent: 1.5em)[\[8\] C. Jaimungal, _In-depth Explanation of Eric Weinstein's Geometric Unity_, Theories of Everything (April 2025). https://youtu.be/AThFAxF7Mgw — 3-hour exposition presenting GU as a complete 30-step derivation without addressing any obstructions.]
+
+

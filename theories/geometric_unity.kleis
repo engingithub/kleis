@@ -1,0 +1,265 @@
+// ============================================================================
+// GEOMETRIC UNITY — Layer 1: The Satisfiable Core
+// ============================================================================
+//
+// Formalizes the components of GU that are fully specified with explicit
+// formulas. Z3 should find these consistent (SAT) immediately.
+//
+// Source: Weinstein, "Geometric Unity: Author's Working Draft v1.0" (April 2021)
+// ============================================================================
+
+
+// ============================================================================
+// PART 1: THE OBSERVERSE — Dimensional Arithmetic
+// ============================================================================
+//
+// Definition 3.1 (Weinstein): The observerse is a triple (X^n, Y^d, {ι})
+// where ι : U^n → Y^d are local Riemannian embeddings.
+//
+// Einsteinian case: Y = Met(X), the bundle of pointwise metrics.
+//   dim(X) = 4
+//   fiber dim = n(n+1)/2 = 4·5/2 = 10
+//   dim(Y) = 4 + 10 = 14
+//   signature: Frobenius inner product gives (4,6) vertical, (7,7) total
+
+data DimTag = DimT(ℤ)
+
+operation dim_base : ℤ
+operation dim_fiber : ℤ
+operation dim_total : ℤ
+operation sig_pos : ℤ
+operation sig_neg : ℤ
+operation fiber_sig_pos : ℤ
+operation fiber_sig_neg : ℤ
+
+structure ObserverseDimensions {
+    axiom base_dim: dim_base = 4
+    axiom fiber_formula: dim_fiber = dim_base * (dim_base + 1) / 2
+    axiom total_dim: dim_total = dim_base + dim_fiber
+    axiom fiber_sig_positive: fiber_sig_pos = dim_base
+    axiom fiber_sig_negative: fiber_sig_neg = dim_base * (dim_base - 1) / 2
+    axiom total_sig_pos: sig_pos = 7
+    axiom total_sig_neg: sig_neg = 7
+}
+
+example "observerse: dim_Y = 14" {
+    assert(dim_total = 14)
+}
+
+example "observerse: fiber is 10-dimensional" {
+    assert(dim_fiber = 10)
+}
+
+example "observerse: total signature is (7,7)" {
+    assert(sig_pos = 7 ∧ sig_neg = 7)
+}
+
+example "observerse: signature is balanced" {
+    assert(sig_pos = sig_neg)
+}
+
+
+// ============================================================================
+// PART 2: THE LIE ALGEBRA so(7,7)
+// ============================================================================
+//
+// Structure group of the chimeric bundle C(Y) = V ⊕ H*.
+// dim(so(p,q)) = (p+q)(p+q-1)/2 = 14·13/2 = 91
+
+data AlgEl = AEl(ℤ)
+
+operation lie_bracket : AlgEl → AlgEl → AlgEl
+operation lie_add : AlgEl → AlgEl → AlgEl
+operation lie_zero : AlgEl
+operation dim_algebra : ℤ
+
+structure SO77_Algebra {
+    axiom algebra_dim: dim_algebra = (sig_pos + sig_neg) * (sig_pos + sig_neg - 1) / 2
+
+    element x : AlgEl
+    element y : AlgEl
+    element z : AlgEl
+
+    axiom anticommute: lie_add(lie_bracket(x, y), lie_bracket(y, x)) = lie_zero
+
+    axiom jacobi: lie_add(lie_add(lie_bracket(x, lie_bracket(y, z)),
+                    lie_bracket(y, lie_bracket(z, x))),
+                    lie_bracket(z, lie_bracket(x, y))) = lie_zero
+
+    axiom add_id_x: lie_add(x, lie_zero) = x
+    axiom add_id_zero: lie_add(lie_zero, x) = x
+    axiom bracket_zero_x: lie_bracket(x, lie_zero) = lie_zero
+
+    axiom x_neq_zero: x ≠ lie_zero
+    axiom y_neq_zero: y ≠ lie_zero
+}
+
+example "so(7,7): dimension is 91" {
+    assert(dim_algebra = 91)
+}
+
+
+// ============================================================================
+// PART 3: CLIFFORD ALGEBRA AND SPINOR DIMENSIONS
+// ============================================================================
+//
+// Cl(7,7): dim = 2^14 = 16384
+// Spinor representation: 2^(14/2) = 128
+// Weyl spinors: 64-dimensional
+// Gauge group U(128): dim = 128² = 16384
+
+operation dim_clifford : ℤ
+operation dim_spinor : ℤ
+operation dim_weyl : ℤ
+operation dim_gauge_group : ℤ
+
+structure SpinorDimensions {
+    axiom clifford_dim: dim_clifford = 16384
+    axiom spinor_dim: dim_spinor = 128
+    axiom weyl_dim: dim_weyl = dim_spinor / 2
+    axiom gauge_group_dim: dim_gauge_group = dim_spinor * dim_spinor
+}
+
+example "spinors: Weyl spinors are 64-dimensional" {
+    assert(dim_weyl = 64)
+}
+
+example "spinors: gauge group dimension matches Clifford" {
+    assert(dim_gauge_group = dim_clifford)
+}
+
+example "spinors: spinor dimension is 128" {
+    assert(dim_spinor = 128)
+}
+
+
+// ============================================================================
+// PART 4: CLIFFORD DECOMPOSITION
+// ============================================================================
+//
+// gl(64, R) ≅ Λ² ⊕ Λ⁶ ⊕ Λ¹⁰ ⊕ Λ¹⁴  inside Cl_R(7,7)
+//   C(14,2) + C(14,6) + C(14,10) + C(14,14) = 91 + 3003 + 1001 + 1 = 4096 = 64²
+
+operation lambda_2_dim : ℤ
+operation lambda_6_dim : ℤ
+operation lambda_10_dim : ℤ
+operation lambda_14_dim : ℤ
+
+structure CliffordDecomposition {
+    axiom lambda_2: lambda_2_dim = 91
+    axiom lambda_6: lambda_6_dim = 3003
+    axiom lambda_10: lambda_10_dim = 1001
+    axiom lambda_14: lambda_14_dim = 1
+    axiom gl64_dimension:
+        lambda_2_dim + lambda_6_dim + lambda_10_dim + lambda_14_dim =
+            dim_weyl * dim_weyl
+}
+
+example "Clifford decomposition: dimensions sum to gl(64)" {
+    assert(lambda_2_dim + lambda_6_dim + lambda_10_dim + lambda_14_dim = 4096)
+}
+
+example "Clifford decomposition: so(7,7) lives in Lambda-2" {
+    assert(lambda_2_dim = dim_algebra)
+}
+
+
+// ============================================================================
+// PART 5: THE INHOMOGENEOUS GAUGE GROUP
+// ============================================================================
+//
+// Definition 5.1 (Weinstein): G = H ⋊ N
+//   H = gauge automorphisms, N = connection space (ad-valued 1-forms)
+//   Group law: (h₁, π₁) · (h₂, π₂) = (h₁h₂, Ad(h₂⁻¹)(π₁) + π₂)
+//   Tilt: τ(h) = (h, h⁻¹ d_{A₀} h)
+//
+// Ground instances (Cantor pattern) to avoid Z3 memory explosion.
+
+data GaugeEl = GEl(ℤ)
+data FormEl = FEl(ℤ)
+data IGEl = IGE(ℤ)
+
+operation h_mul : GaugeEl → GaugeEl → GaugeEl
+operation h_inv : GaugeEl → GaugeEl
+operation h_id : GaugeEl
+operation adjoint_action : GaugeEl → FormEl → FormEl
+operation form_add : FormEl → FormEl → FormEl
+operation form_zero : FormEl
+operation form_neg : FormEl → FormEl
+operation d_connection : GaugeEl → FormEl
+operation ig_first : IGEl → GaugeEl
+operation ig_second : IGEl → FormEl
+operation ig_make : GaugeEl → FormEl → IGEl
+operation ig_mul : IGEl → IGEl → IGEl
+operation tilt : GaugeEl → IGEl
+operation ig_id : IGEl
+
+structure InhomogeneousGaugeGroup {
+    element g1 : GaugeEl
+    element g2 : GaugeEl
+    element g3 : GaugeEl
+    element pi1 : FormEl
+
+    axiom h_id_left: h_mul(h_id, g1) = g1
+    axiom h_id_right: h_mul(g1, h_id) = g1
+    axiom h_inv_g1: h_mul(g1, h_inv(g1)) = h_id
+    axiom h_inv_g2: h_mul(g2, h_inv(g2)) = h_id
+    axiom h_assoc_ground: h_mul(h_mul(g1, g2), g3) = h_mul(g1, h_mul(g2, g3))
+
+    axiom form_add_zero_ground: form_add(pi1, form_zero) = pi1
+    axiom form_neg_ground: form_add(pi1, form_neg(pi1)) = form_zero
+    axiom adjoint_id: adjoint_action(h_id, pi1) = pi1
+
+    axiom ig_id_def: ig_id = ig_make(h_id, form_zero)
+    axiom ig_proj_first_g1: ig_first(ig_make(g1, pi1)) = g1
+    axiom ig_proj_second_g1: ig_second(ig_make(g1, pi1)) = pi1
+
+    axiom d_conn_identity: d_connection(h_id) = form_zero
+    axiom tilt_id: tilt(h_id) = ig_make(h_id, form_zero)
+
+    axiom g1_not_id: g1 ≠ h_id
+    axiom g2_not_id: g2 ≠ h_id
+    axiom g1_neq_g2: g1 ≠ g2
+    axiom pi1_nonzero: pi1 ≠ form_zero
+}
+
+example "gauge group: left identity for g1" {
+    assert(h_mul(h_id, g1) = g1)
+}
+
+example "gauge group: inverse of g1" {
+    assert(h_mul(g1, h_inv(g1)) = h_id)
+}
+
+example "gauge group: tilt preserves identity" {
+    assert(tilt(h_id) = ig_id)
+}
+
+example "gauge group: associativity" {
+    assert(h_mul(h_mul(g1, g2), g3) = h_mul(g1, h_mul(g2, g3)))
+}
+
+
+// ============================================================================
+// PART 6: AUGMENTED TORSION
+// ============================================================================
+//
+// T(ψ) = π - ε⁻¹ d₀ ε  (Weinstein Section 7)
+
+operation augmented_torsion : IGEl → FormEl
+
+structure AugmentedTorsion {
+    axiom torsion_at_identity: augmented_torsion(ig_id) = form_zero
+
+    element psi_nontrivial : IGEl
+    axiom psi_not_id: psi_nontrivial ≠ ig_id
+    axiom torsion_nontrivial: augmented_torsion(psi_nontrivial) ≠ form_zero
+}
+
+example "torsion: vanishes at identity" {
+    assert(augmented_torsion(ig_id) = form_zero)
+}
+
+example "torsion: non-trivial away from identity" {
+    assert(augmented_torsion(psi_nontrivial) ≠ form_zero)
+}

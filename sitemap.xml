@@ -7,7 +7,7 @@
   </url>
   <url>
     <loc>https://kleis.io/papers</loc>
-    <lastmod>2026-05-16</lastmod>
+    <lastmod>2026-05-24</lastmod>
     <priority>0.5</priority>
   </url>
   <url>
@@ -428,6 +428,16 @@
   <url>
     <loc>https://kleis.io/docs/papers/pot_ising_admissibility_paper.pdf</loc>
     <lastmod>2026-05-16</lastmod>
+    <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>https://kleis.io/docs/papers/geometric_unity_audit.pdf</loc>
+    <lastmod>2026-05-24</lastmod>
+    <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>https://kleis.io/docs/papers/geometric_unity_epilogue.pdf</loc>
+    <lastmod>2026-05-24</lastmod>
     <priority>1.0</priority>
   </url>
 </urlset>
