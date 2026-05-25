@@ -485,7 +485,14 @@ structure NguyenTrilemma(Theory) {
 }
 ```
 
-This structure is satisfiable only if at least one of (Shiab, anomaly-freedom, unitarity, SUSY) is abandoned. Since the Shiab IS the theory's central mechanism — the 'unity' in Geometric Unity — abandoning it means abandoning the theory. The other options (accepting anomalies, accepting non-unitarity, dropping SUSY) each render the theory physically unviable. There is no escape route that preserves GU's claims.")
+This structure is satisfiable only if at least one of (Shiab, anomaly-freedom, unitarity, SUSY) is abandoned:
+
+- *Dropping the Shiab* abandons the theory's central mechanism — the 'unity' in Geometric Unity.
+- *Accepting anomalies* means the quantum theory is inconsistent (gauge symmetry is broken at loop level, rendering predictions unreliable).
+- *Accepting non-unitarity* means negative probabilities — the theory does not describe physics.
+- *Dropping SUSY* is the least immediately fatal option. Without supersymmetry, the theory loses its claimed mechanism for relating bosonic and fermionic sectors in the inhomogeneous gauge group. However, the deeper issue is that in $D = 14$ with signature $(7,7)$, SUSY was the only proposed mechanism for controlling the ghost sectors that arise from the indefinite metric. Without it, one must provide an alternative ghost-decoupling mechanism — which GU does not supply. Dropping SUSY is therefore not independently viable without additional structure that Weinstein has not specified.
+
+The escape routes are not equally costly, but none preserves GU's claims as stated.")
 
 // ============================================================
 // Section 10: Z3 Verification and Independence Results
