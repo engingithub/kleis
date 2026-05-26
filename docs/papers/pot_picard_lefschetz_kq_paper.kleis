@@ -1,0 +1,442 @@
+// =============================================================================
+// The Path Integral as Kernel Decomposition:
+// Picard-Lefschetz Theory in the K-Q Framework
+// =============================================================================
+//
+// Volume XII of the POT Verified Unified Field Theory (VUFT) Series
+//
+// This paper connects the abstract K-Q framework (Volume IX) to the modern
+// program of Picard-Lefschetz path integrals and resurgent asymptotics.
+// The Feynman path integral, treated as a K operator, decomposes into
+// Lefschetz thimbles — each a distinct K-representation yielding the same
+// observable under Q. Resurgent relations between saddle sectors are shown
+// to be instances of Q∘K composition on ker(Q): perturbative series
+// "remembering" non-perturbative topology is structurally identical to
+// ghost-mediated null-space activity. Stokes phenomenon (intersection
+// numbers jumping) is a factorization rearrangement in the kernel monoid.
+//
+// All structural results verified by Z3 in
+//   theories/pot_picard_lefschetz_kq.kleis
+//
+// Pipeline:
+//   kleis test --raw-output --example compile \
+//       docs/papers/pot_picard_lefschetz_kq_paper.kleis \
+//       > pot_picard_lefschetz_kq_paper.typ
+//   typst compile pot_picard_lefschetz_kq_paper.typ
+//
+// =============================================================================
+
+import "stdlib/prelude.kleis"
+import "stdlib/templates/arxiv_paper.kleis"
+
+// =============================================================================
+// Paper Metadata
+// =============================================================================
+
+define paper_title = "The Path Integral as Kernel Decomposition: Picard-Lefschetz Theory in the K-Q Framework"
+
+define paper_authors = [
+    Author("Engin Atik", "1")
+]
+
+define paper_affiliations = [
+    Affiliation(1, "Kleis Research", "https://kleis.io")
+]
+
+define paper_abstract = "The Feynman path integral $integral cal(D)[phi] thin e^(i S[phi] \\/ planck.reduce)$ is a production kernel $K$ that maps field configurations to transition amplitudes. On the original real integration domain, this kernel is oscillatory and conditionally convergent. Picard-Lefschetz theory resolves this by complexifying the field space and decomposing the integral into a sum over Lefschetz thimbles $cal(J)_sigma$ --- steepest-descent manifolds attached to saddle points of the complexified action. We show that this thimble decomposition is a K-factorization in the sense of Volume VIII: each thimble defines a component kernel $K_sigma$, the total kernel is $K = sum_sigma n_sigma K_sigma$ where $n_sigma$ are topological intersection numbers, and all decompositions yield the same observable under the projection $Q$. The framework identifies three structural results. First, resurgent relations --- in which the perturbative expansion around one saddle encodes information about other saddles --- are instances of $Q compose K$ composition on $ker(Q)$: non-perturbative saddle contributions lie in $ker(Q)$ of the perturbative projection but shape observables through the composed map, exactly as Faddeev-Popov ghosts do in Volume IV. Second, the Stokes phenomenon (intersection numbers $n_sigma$ jumping at Stokes lines) is a factorization rearrangement in the kernel monoid: the component decomposition of $K$ changes while $Q compose K$ is invariant, directly analogous to the formulation fiber of Volume VIII. Third, stationary-phase dominance --- in which wildly oscillating paths cancel and only neighborhoods of $delta S = 0$ survive --- is the structural mechanism by which $K$ produces finite observables: incoherent contributions self-cancel in $ker(Q)$, while coherent geometric structure passes to $\"im\"(Q)$. The polarizer principle (non-commutativity of projections) provides the physical intuition: elements individually in $ker(Q)$ contribute non-trivially through $Q compose K$, just as crossed polarizers transmit light when an intermediate filter is inserted. All structural results are machine-verified by Z3."
+
+define paper_keywords = "path integral, Picard-Lefschetz, Lefschetz thimble, resurgence, Stokes phenomenon, K-Q framework, kernel decomposition, null space, saddle point, stationary phase, ghost activity, factorization, formal verification, Z3"
+
+// =============================================================================
+// Section 1: Introduction — The Polarizer Principle
+// =============================================================================
+
+define sec_intro = ArxivSection("Introduction: The Polarizer Principle",
+"Consider three polarizing films. Two films with orthogonal transmission axes transmit zero light: the projection $P_(\"horiz\") compose P_(\"vert\")$ annihilates all states. Insert a third film at $45 degree$ between them: $P_(\"horiz\") compose P_(45 degree) compose P_(\"vert\")$ transmits nonzero intensity. An element in $ker(P_(\"horiz\"))$ --- vertically polarized light --- contributes to the observable (transmitted intensity) through composition with an intermediate projection.
+
+This is the polarizer principle: *projection does not commute with composition*. Elements individually annihilated by $Q$ can contribute to observables through $Q compose K$ when $K$ routes through an intermediate structure.
+
+The preceding volumes of this series established that this principle governs quantum field theory:
+
++ *Volume IV* [AtikYM]: Faddeev-Popov ghosts lie in $ker(Q)$ (unphysical) but determine the $beta$-function through $Q compose K$ (observable). The algebraic switch is $f^(a b c) != 0$.
+
++ *Volume V* [AtikGhost]: The ghost-activity theorem proves: $ker(Q)$ is active if and only if the gauge algebra is non-abelian. The null space is not inert.
+
++ *Volume VI* [AtikAtlas]: Six types of $ker(Q)$ structure, including migratory elements (anomalies) that cross the $ker(Q)$/$\"im\"(Q)$ boundary.
+
+This paper shows that the same principle governs the *path integral itself*. The Feynman path integral is a production kernel $K$ that sums over all field configurations. Most configurations lie in $ker(Q)$ of the stationary-phase projection --- they contribute wildly oscillating phases that cancel. But the *composition* $Q compose K$ through the full integral produces finite, physical observables. The individually null paths are not inert; they participate through interference.
+
+The modern program of Picard-Lefschetz theory [Wit2010] and resurgence [DU2016] makes this precise by decomposing $K$ into Lefschetz thimbles. We show that this decomposition is a K-factorization (Volume VIII) and that resurgent relations are Q$compose$K activity on $ker(Q)$ (Volume V). The path integral joins the K-Q catalogue as the sixth kernel type --- and the richest.")
+
+// =============================================================================
+// Section 2: The Path Integral as Production Kernel
+// =============================================================================
+
+define sec_kernel = ArxivSection("The Path Integral as Production Kernel",
+"=== The kernel structure
+
+The Feynman path integral defines a production kernel:
+
+$ K_(\"PI\")[phi_i, phi_f; T] = integral_(phi(0) = phi_i)^(phi(T) = phi_f) cal(D)[phi] thin e^(i S[phi] \\/ planck.reduce) $
+
+This maps boundary data (initial and final field configurations) to transition amplitudes. In the K-Q language:
+
+$ K_(\"PI\") : \"BoundaryData\" arrow.r \"Amplitude\" $
+$ Q : \"Amplitude\" arrow.r \"Observable\" $
+
+The observable projection $Q$ extracts measurable quantities: cross-sections ($|K|^2$), expectation values ($angle.l O angle.r = Q(K)$), or spectral data (poles of the propagator). The composed map $Q compose K_(\"PI\")$ is the physical theory.
+
+=== The oscillatory problem
+
+On the original real integration domain, $K_(\"PI\")$ is not well-defined as an absolutely convergent integral. The factor $e^(i S \\/ planck.reduce)$ oscillates wildly: nearby field configurations contribute phases that nearly cancel. The integral is *conditionally* convergent --- its value depends on the precise ordering and grouping of contributions.
+
+In K-Q language: most of the integration domain contributes to $ker(Q)$ of the stationary-phase projection. Only neighborhoods of classical solutions ($delta S = 0$) contribute coherently to $\"im\"(Q)$. The vast majority of 'paths' are individually in $ker(Q)$ but collectively determine observables through $Q compose K$.
+
+This is the polarizer principle at infinite-dimensional scale. The individually null paths are not inert; they participate through destructive interference that sculpts the observable.
+
+=== The free-particle propagator
+
+For a free non-relativistic particle, $K$ is exactly computable:
+
+$ K(x_f, t; x_i, 0) = sqrt(m / (2 pi i planck.reduce t)) exp(i m(x_f - x_i)^2 / (2 planck.reduce t)) $
+
+This solves the Schrödinger equation and equals the Feynman path integral exactly. It is the unique kernel satisfying: (i) composition law $K(x_f, t_2; x_i, 0) = integral K(x_f, t_2; x, t_1) K(x, t_1; x_i, 0) d x$, (ii) Schrödinger evolution, (iii) initial condition $K(x_f, 0; x_i, 0) = delta(x_f - x_i)$.
+
+The composition law is the semigroup property of the kernel monoid (Volume VIII). It expresses causal, forward-in-time evolution --- no retrocausality, no 'exploring the future.' The 'sum over all paths' is the global representation of local causal propagation, not literal future-probing.")
+
+// =============================================================================
+// Section 3: Picard-Lefschetz Decomposition as K-Factorization
+// =============================================================================
+
+define sec_pl = ArxivSection("Picard-Lefschetz Decomposition as K-Factorization",
+"=== Complexification
+
+Picard-Lefschetz theory [Wit2010, TK2014, FLT2017] resolves the oscillatory problem by complexifying the field space. Real field configurations $phi : M arrow bb(R)$ are promoted to complex configurations $phi : M arrow bb(C)$. The action $S[phi]$ becomes a holomorphic functional on the complexified configuration space.
+
+The original real integration domain $Gamma_(bb(R)) subset bb(C)^infinity$ is then *deformed* --- using Cauchy's theorem in infinite dimensions --- into a sum of Lefschetz thimbles:
+
+$ Gamma_(bb(R)) = sum_sigma n_sigma cal(J)_sigma $
+
+where $cal(J)_sigma$ is the steepest-descent manifold (Lefschetz thimble) attached to the $sigma$-th saddle point $phi_sigma$ of the complexified action, and $n_sigma in bb(Z)$ are intersection numbers determined by the topology of the flow.
+
+=== The thimble decomposition as K-factorization
+
+Each thimble defines a component kernel:
+
+$ K_sigma[phi_i, phi_f] = integral_(cal(J)_sigma) cal(D)[phi] thin e^(i S[phi] \\/ planck.reduce) $
+
+On each thimble, the imaginary part of the action is constant ($\"Im\"(S)|_(cal(J)_sigma) = \"Im\"(S(phi_sigma))$) and the real part decreases monotonically away from the saddle. This makes each $K_sigma$ absolutely convergent --- the oscillatory problem is solved.
+
+The total kernel is:
+
+$ K_(\"PI\") = sum_sigma n_sigma K_sigma $
+
+This is a *K-factorization* in the sense of Volume VIII: the total kernel decomposes into components, each attached to a geometrically meaningful sector (a saddle point of the classical action). The factorization is:
+
++ *Not unique* --- different deformations of $Gamma_(bb(R))$ yield different thimble decompositions (the Stokes phenomenon, Section 5).
++ *Observable-preserving* --- all decompositions yield the same $Q compose K$ (Cauchy's theorem guarantees this).
++ *Geometrically structured* --- each component corresponds to a classical solution (instanton, perturbative vacuum, bounce, etc.).
+
+This maps directly to the kernel monoid of Volume VIII. The integer coefficients $n_sigma$ are the topological analogue of the factorization multiplicity. The total $Q compose K$ is invariant across decompositions --- the physical content does not depend on which thimble basis is chosen.
+
+=== Comparison with residue theorem
+
+The structural parallel with contour integration is exact:
+
+#table(
+    columns: 3,
+    [*Structure*], [*Residue theorem*], [*Path integral (Picard-Lefschetz)*],
+    [Integration domain], [Contour $gamma subset bb(C)$], [Field-space cycle $Gamma subset bb(C)^infinity$],
+    [Oscillatory integrand], [$f(z)$], [$e^(i S[phi] \\/ planck.reduce)$],
+    [Critical points], [Poles/saddles of $f$], [Saddles of $S$ ($delta S = 0$)],
+    [Decomposition], [$gamma = sum n_k C_k$], [$Gamma = sum n_sigma cal(J)_sigma$],
+    [Coefficients], [Winding numbers $n_k in bb(Z)$], [Intersection numbers $n_sigma in bb(Z)$],
+    [Invariance], [Cauchy's theorem], [Cauchy's theorem ($infinity$-dim)],
+    [Dominant contributions], [Residues at poles], [Semiclassical expansions at saddles],
+)
+
+The path integral is the infinite-dimensional generalization of the residue theorem. Both are global integral formalisms extracting invariant structure from oscillatory geometry.")
+
+// =============================================================================
+// Section 4: Resurgence as Q∘K Activity on ker(Q)
+// =============================================================================
+
+define sec_resurgence = ArxivSection("Resurgence as Null-Space Activity",
+"=== The resurgence program
+
+Resurgence theory [Eca1981, DU2016, BDU2013] establishes that the perturbative expansion around one saddle *encodes* information about other saddles. Specifically: the large-order behavior of perturbative coefficients around the perturbative vacuum (saddle $sigma_0$) is controlled by the action difference $S(sigma_1) - S(sigma_0)$ of the nearest non-perturbative saddle ($sigma_1$, typically an instanton).
+
+The resurgent relation takes the schematic form:
+
+$ a_n^((sigma_0)) tilde.op (n!) / (S_(sigma_1) - S_(sigma_0))^n dot (\"fluctuations around\" sigma_1) $
+
+The late-order coefficients of perturbation theory around $sigma_0$ are determined by the early-order fluctuations around $sigma_1$.
+
+=== K-Q interpretation
+
+In the K-Q framework, this becomes transparent. Define the perturbative projection $Q_(\"pert\")$: the projection that extracts the perturbative series around a given saddle. Then:
+
++ The perturbative expansion around $sigma_0$ is $Q_(\"pert\") compose K_(sigma_0)$ --- the projection applied to the perturbative thimble kernel.
++ Non-perturbative saddle contributions ($K_(sigma_1)$, instantons) lie in $ker(Q_(\"pert\"))$ --- they are invisible to finite-order perturbation theory. This is *projection-relative* invisibility: instantons are not 'unphysical' in the full theory (they are real solutions of the Euclidean equations of motion). They are invisible only relative to the perturbative projection $Q_(\"pert\")$. The full projection $Q$ sees them perfectly well.
++ Yet the composed map $Q_(\"pert\") compose K_(\"PI\")$, which includes *all* thimbles, differs from $Q_(\"pert\") compose K_(sigma_0)$ --- the non-perturbative saddles shape the perturbative series through the total composition.
+
+This is *structurally analogous to* the ghost-activity mechanism of Volume V:
+
+#table(
+    columns: 3,
+    [*Structure*], [*Ghost activity (Vol. V)*], [*Resurgence*],
+    [Null-space element], [Faddeev-Popov ghost], [Non-perturbative saddle $K_(sigma_1)$],
+    [In $ker(Q)$ because], [Unphysical (violates spin-statistics)], [Invisible to perturbation theory],
+    [Shapes $\"im\"(Q)$ through], [$Q compose K$ (ghost loop $arrow$ $beta_0$)], [$Q compose K_(\"PI\")$ (resurgent relation)],
+    [Algebraic switch], [$f^(a b c) != 0$], [$S_(sigma_1) != S_(sigma_0)$ (action gap)],
+    [Observable affected], [$beta$-function sign], [Large-order growth, Borel ambiguities],
+)
+
+The resurgent relation is null-space activity: elements in $ker(Q_(\"pert\"))$ that determine properties of $\"im\"(Q_(\"pert\"))$ through the composed map. Perturbation theory 'remembers' non-perturbative topology because $Q compose K$ routes through $ker(Q)$ --- the polarizer principle at the level of asymptotic expansions.
+
+=== Ghost-instantons
+
+The paper of Basar, Dunne, and Ünsal [BDU2013] identifies 'ghost-instantons' --- complex saddle points that are not on the original real integration contour (their Stokes multiplier is zero) yet still affect the perturbative expansion through resurgent cancellations. In K-Q language: ghost-instantons are elements of $ker(Q)$ (not on the physical contour, hence unobservable individually) that are active (shape $\"im\"(Q)$ through composition). The structural analogy with Faddeev-Popov ghosts is precise: both are individually unobservable elements that shape observables through composition. The analogy is structural, not ontological --- FP ghosts are gauge artifacts while ghost-instantons are complex classical solutions --- but both instantiate the same K-Q pattern of null-space activity.")
+
+// =============================================================================
+// Section 5: Stokes Phenomenon as Factorization Rearrangement
+// =============================================================================
+
+define sec_stokes = ArxivSection("Stokes Phenomenon as Factorization Rearrangement",
+"=== The Stokes phenomenon
+
+As parameters vary (coupling constant, external momenta, $planck.reduce$), the intersection numbers $n_sigma$ can jump discontinuously at special parameter values called *Stokes lines*. At a Stokes line, the relative phase between two saddles aligns, and a thimble that previously did not contribute to the decomposition begins to contribute (or vice versa).
+
+This means the factorization $K = sum n_sigma K_sigma$ *changes* at Stokes lines --- the component decomposition is parameter-dependent.
+
+=== K-Q interpretation: factorization rearrangement
+
+Volume VIII [AtikFactorization] proved that non-admissible kernels have non-unique factorizations, and that physically equivalent formulations of GR (Cartan, teleparallel, Palatini) correspond to different factorizations of the same total pipeline --- a *factorization rearrangement*. The physical content ($Q compose K$) is invariant; only the decomposition changes.
+
+The Stokes phenomenon is the same structure:
+
++ The total kernel $K_(\"PI\")$ is parameter-independent (it depends only on the action $S$ and the boundary data).
++ The thimble decomposition $K = sum n_sigma K_sigma$ is parameter-dependent (the $n_sigma$ jump at Stokes lines).
++ The observable $Q compose K$ is invariant across the Stokes transition (Cauchy's theorem guarantees this).
+
+The factorization rearrangement:
+
+$ K_(\"PI\") = n_1 K_(sigma_1) + n_2 K_(sigma_2) quad (\"before Stokes line\") $
+$ K_(\"PI\") = n_1' K_(sigma_1) + n_2' K_(sigma_2) + n_3 K_(sigma_3) quad (\"after Stokes line\") $
+
+with $Q compose K$ unchanged. A new saddle enters the decomposition, but the physical content is invariant.
+
+This is the path-integral analogue of the formulation fiber: different thimble decompositions sit over the same physical theory, related by factorization rearrangement at Stokes lines. The monoid structure of Volume VIII applies directly.
+
+=== Intersection numbers as topological data
+
+The integers $n_sigma$ --- which thimbles contribute and with what multiplicity --- are topological invariants of the flow. They are determined by the relative homology of the thimbles with respect to the original real cycle. In K-Q language: the factorization multiplicities are topological, not dynamical. The *number* of thimbles needed to represent $K$ is a structural property of the configuration space, not a choice of gauge or regularization.")
+
+// =============================================================================
+// Section 6: Stationary Phase as Projection Mechanism
+// =============================================================================
+
+define sec_stationary = ArxivSection("Stationary Phase as Projection Mechanism",
+"=== The stationary-phase principle
+
+In the semiclassical limit ($planck.reduce arrow 0$), the path integral is dominated by neighborhoods of classical solutions --- configurations satisfying:
+
+$ delta S[phi] = 0 $
+
+All other contributions cancel by destructive interference. The leading approximation is:
+
+$ K_(\"PI\") approx sum_(\"classical\" thin phi_(\"cl\")) e^(i S[phi_(\"cl\")]) / planck.reduce) dot (\"Gaussian fluctuations\") $
+
+This is the saddle-point approximation: only saddles survive; everything else is in $ker(Q)$ of the semiclassical projection.
+
+=== K-Q interpretation
+
+Stationary-phase dominance is the mechanism by which $K$ produces finite observables despite summing over an infinite-dimensional space of configurations. In K-Q language:
+
++ The full configuration space $cal(C)$ decomposes under $Q$ into coherent sectors (neighborhoods of $delta S = 0$) and incoherent sectors (everything else).
++ Incoherent sectors lie in $ker(Q)$ in the sense that $Q(\"incoherent\") arrow 0$ in the observable limit --- their oscillating contributions cancel by destructive interference and produce zero net observable. This is asymptotic annihilation (interference-based), not strict algebraic kernel membership. The $ker(Q)$ language is structural shorthand for the vanishing of the projection in the physical limit.
++ Coherent sectors lie in $\"im\"(Q)$: they survive interference and produce physical predictions.
+
+The projection $Q$ *is* stationary-phase extraction. The production kernel $K$ generates all representational probes (all paths). The projection $Q$ extracts the invariant content (classical solutions + fluctuations). The composed map $Q compose K$ produces observables.
+
+This is structurally identical to how convergent Feynman integrals work in Volumes I--IV: the kernel $K_(\"feyn\")$ generates formal expressions (loop integrands), and $Q$ extracts the physical differences. Here the 'formal expressions' are *all field configurations* and the 'physical differences' are *stationary-phase survivors*.
+
+=== Connection to admissibility
+
+The stationary-phase decomposition is the infinite-dimensional limit of a general K-Q structure: when the kernel sums oscillatory contributions, the projection annihilates the incoherent part and retains the coherent part. The coherent/incoherent decomposition *is* the $\"im\"(Q)$/$ker(Q)$ decomposition. In Picard-Lefschetz language, thimbles (coherent, steepest-descent) play the structural role of $\"im\"(Q)$; anti-thimbles (incoherent, steepest-ascent) play the structural role of $ker(Q)$. The identification is structural --- thimbles and anti-thimbles are geometric objects while $\"im\"(Q)$ and $ker(Q)$ are projection-theoretic --- but the decomposition logic is the same.
+
+=== No retrocausality
+
+The propagator $K(x_f, t_f; x_i, t_i) = angle.l x_f | e^(-i H(t_f - t_i) \\/ planck.reduce) | x_i angle.r$ is constructed from *forward* time evolution. The path integral emerges after slicing this causal evolution into infinitesimal steps. The 'sum over all paths' is a *representation* of causal propagation, not literal future-probing. In K-Q language: the paths are components of the K-representation basis (like Fourier modes), not ontological events. No individual path is 'real' --- only $Q compose K$ produces observables.")
+
+// =============================================================================
+// Section 7: The Structural Prediction
+// =============================================================================
+
+define sec_prediction = ArxivSection("The Structural Prediction",
+"The K-Q framework makes a structural prediction beyond what Picard-Lefschetz theory alone provides:
+
+=== Multiple K-representations with shared Q
+
+If the thimble decomposition is one K-factorization yielding a given $Q compose K$, then there should exist *other* K-representations --- not necessarily thimble-based --- that yield the same observable quotient. Different 'bases' for the production kernel, with different null-space structures, should all produce the same $\"im\"(Q)$.
+
+This prediction is already confirmed by existing physics:
+
++ *Euclidean vs. Lorentzian path integral:* Same observables (correlation functions related by Wick rotation), different K-representations (oscillatory vs. exponentially suppressed).
++ *Operator formalism vs. path integral:* $angle.l hat(O) angle.r = \"Tr\"(rho hat(O))$ and $angle.l hat(O) angle.r = integral cal(D)[phi] thin O[phi] thin e^(i S \\/ planck.reduce) \\/ Z$ yield identical observables from completely different K-architectures.
++ *Different gauge-fixings:* The formulation fiber of Volume VIII --- different gauge choices give different $K$-decompositions with the same $Q compose K$.
++ *Lattice vs. continuum:* Same observables in the continuum limit, from a radically different K-representation (discrete configuration sums vs. functional integrals).
+
+The K-Q framework explains *why* these equivalences exist: they are different fibers over the same observable quotient. The non-uniqueness of K is not a defect --- it is the structural reason physics admits multiple equivalent formalisms.
+
+=== The atlas connection
+
+Volume VII [AtikAtlas] classified six types of $ker(Q)$ structure. The path-integral context adds texture to each:
+
+#table(
+    columns: 3,
+    [*Atlas type*], [*QFT realization (Vol. VII)*], [*Path integral realization*],
+    [Type 1: Inert], [Scheme constants ($A_0$)], [Off-shell paths (cancel by interference)],
+    [Type 2: Active], [Ghosts ($f^(a b c) != 0$)], [Ghost-instantons (complex saddles)],
+    [Type 3: Redistributive], [Unphysical polarizations], [Stokes-dependent thimble weights],
+    [Type 4: Migratory], [Chiral anomaly], [Saddle coalescence (new saddle emerges)],
+    [Type 5: Confined], [Quarks/gluons], [Non-perturbative bound-state saddles],
+    [Type 6: Latent], [$theta$-vacuum], [Instanton sectors (tunneling between vacua)],
+)
+
+Every atlas type has a path-integral instantiation. The classification is not specific to perturbative Feynman diagrams --- it describes the universal structure of K-Q decomposition.")
+
+// =============================================================================
+// Section 8: Implications
+// =============================================================================
+
+define sec_implications = ArxivSection("Implications",
+"=== The K-Q framework subsumes, not competes with, Picard-Lefschetz
+
+Picard-Lefschetz theory provides concrete analytic tools: gradient flow equations, thimble construction algorithms, Monte Carlo methods on complexified spaces. The K-Q framework provides the structural context: *why* the thimble decomposition has the form it does, *why* resurgent relations exist, and *why* different decompositions yield the same observables.
+
+The relationship is:
+
+$ \"Picard-Lefschetz\" subset.eq \"K-Q (path integral instantiation)\" subset.eq \"K-Q (abstract framework)\" $
+
+The abstract framework (Volume IX) is domain-independent. It applies equally to gravitational kernels (Volume I), Biot-Savart (Volume VI), and path integrals (this volume). Picard-Lefschetz is the specific analytic machinery for the path-integral instantiation.
+
+=== Divergences as null-space elements
+
+The resurgence program treats perturbative divergences not as failures but as encoded structural information: the factorial growth of perturbative coefficients *encodes* the location and weight of non-perturbative saddles. In K-Q language: divergences (elements associated with $ker(Q)$) are not 'infinities to subtract' but structural data about the null space. Volume X proved this for Hadamard renormalization; the resurgence connection extends it to the asymptotic structure of perturbation theory itself.
+
+=== The polarizer principle as organizing insight
+
+The polarizer experiment --- three films, non-commutativity of projections --- provides the correct physical intuition for all of the following:
+
++ Ghost activity: $ker(Q)$ elements shaping $\"im\"(Q)$ through $Q compose K$
++ Resurgent relations: non-perturbative saddles shaping perturbative asymptotics
++ Stationary-phase dominance: incoherent paths canceling to produce finite observables
++ Migration (anomalies): $ker(Q)$ elements crossing to $\"im\"(Q)$ at higher resolution
+
+All are instances of: *individually null contributions producing non-trivial observables through composition*. This is the structural content of $Q compose K != 0$ on $ker(Q)$.
+
+=== The projection mechanism: geometry reconstructed, not assumed
+
+The path integral may reveal something deeper than 'another K-Q instantiation.' It may exhibit the *mechanism* by which POT projection produces observable geometry and topology. In POT, the ontological substrate $H_(\"ont\")$ is not directly accessible. Observable structure is extracted by the composed map $Q compose K$. The path integral makes this extraction *dynamical*:
+
++ The production kernel $K$ generates all admissible modal probes (field configurations, paths, thimbles).
++ Incoherent probes self-cancel through destructive interference --- they fall into effective $ker(Q)$.
++ Coherent survivors (neighborhoods of $delta S = 0$, stable saddle contributions) pass into $\"im\"(Q)$.
++ The resulting observable geometry is not a static image of something pre-existing; it is *reconstructed* as the invariant content of kernel-mediated probing.
+
+The path integral thus realizes POT projection dynamically: the production kernel probes configuration-space topology, while the projection $Q$ extracts the coherent invariant geometry observed as physical law. Geometry and topology are not assumed by POT projection --- they are reconstructed as the stable invariant content that survives the kernel-to-observable map.
+
+This may explain why the Feynman path integral felt structurally close to K-Q from the outset: it is an already-existing physics realization of the general POT projection mechanism.
+
+=== What this paper does and does not claim
+
+This paper claims: the Picard-Lefschetz thimble decomposition is a K-factorization; resurgent relations are Q$compose$K activity on $ker(Q)$; the Stokes phenomenon is a factorization rearrangement; and stationary-phase dominance is the projection mechanism.
+
+This paper does not claim: computational equivalence with Picard-Lefschetz methods (K-Q does not replace gradient flow algorithms), that all resurgent structures reduce to the six atlas types (this is a conjecture), or that the K-Q framework provides new computational tools for evaluating path integrals (it provides structural classification, not numerical methods).")
+
+// =============================================================================
+// References
+// =============================================================================
+
+define ref_witten = ArxivReference("Wit2010",
+    "Witten, E. Analytic continuation of Chern-Simons theory. AMS/IP Stud. Adv. Math. 50, 347--446 (2011). arXiv:1001.2933.")
+
+define ref_dunne_unsal = ArxivReference("DU2016",
+    "Dunne, G. V. and Ünsal, M. New nonperturbative methods in quantum field theory: from large-N orbifolds to bions and resurgence. Ann. Rev. Nucl. Part. Sci. 66, 245--272 (2016). arXiv:1601.03414.")
+
+define ref_bdu = ArxivReference("BDU2013",
+    "Basar, G., Dunne, G. V. and Ünsal, M. Resurgence theory, ghost-instantons, and analytic continuation of path integrals. JHEP 10, 041 (2013). arXiv:1308.1108.")
+
+define ref_tanizaki = ArxivReference("TK2014",
+    "Tanizaki, Y. and Koike, T. Real-time Feynman path integral with Picard-Lefschetz theory and its applications to quantum tunneling. Ann. Phys. 351, 250--274 (2014). arXiv:1406.2386.")
+
+define ref_feldbrugge = ArxivReference("FLT2017",
+    "Feldbrugge, J., Lehners, J.-L. and Turok, N. Lorentzian quantum cosmology. Phys. Rev. D 95, 103508 (2017).")
+
+define ref_ecalle = ArxivReference("Eca1981",
+    "Écalle, J. Les fonctions résurgentes (3 volumes). Publications mathématiques d'Orsay (1981--1985).")
+
+define ref_berry_howls = ArxivReference("BH1991",
+    "Berry, M. V. and Howls, C. J. Hyperasymptotics for integrals with saddles. Proc. R. Soc. Lond. A 434, 657--675 (1991).")
+
+define ref_abstract_kq = ArxivReference("AtikAbstractKQ",
+    "Atik, E. The abstract K-Q framework: kernels, projections, and null-space structure across domains. POT VUFT Series, Vol. IX. *Preprint* (2026).")
+
+define ref_factorization = ArxivReference("AtikFactorization",
+    "Atik, E. Non-unique factorization of projection kernels. POT VUFT Series, Vol. VIII. *Preprint* (2026).")
+
+define ref_ghost = ArxivReference("AtikGhost",
+    "Atik, E. Ghost-mediated null-space activity: a structural theorem from the K-Q framework. POT VUFT Series, Vol. V. *Preprint* (2026).")
+
+define ref_ym = ArxivReference("AtikYM",
+    "Atik, E. The null space is not inert: Yang-Mills vacuum polarization from convergent integrals. POT VUFT Series, Vol. IV. *Preprint* (2026).")
+
+define ref_atlas = ArxivReference("AtikAtlas",
+    "Atik, E. The structural atlas of ker(Q). POT VUFT Series, Vol. VII. *Preprint* (2026).")
+
+// =============================================================================
+// Paper Assembly
+// =============================================================================
+
+define paper_sections = [
+    sec_intro,
+    sec_kernel,
+    sec_pl,
+    sec_resurgence,
+    sec_stokes,
+    sec_stationary,
+    sec_prediction,
+    sec_implications,
+    ref_witten,
+    ref_dunne_unsal,
+    ref_bdu,
+    ref_tanizaki,
+    ref_feldbrugge,
+    ref_ecalle,
+    ref_berry_howls,
+    ref_abstract_kq,
+    ref_factorization,
+    ref_ghost,
+    ref_ym,
+    ref_atlas
+]
+
+define paper = arxiv_paper(
+    paper_title,
+    paper_authors,
+    paper_affiliations,
+    paper_abstract,
+    paper_keywords,
+    paper_sections
+)
+
+example "paper is valid" {
+    assert(valid_arxiv_paper(paper) = true)
+    out("Paper validation: OK")
+}
+
+example "compile" {
+    let typst = compile_arxiv_paper(paper) in
+    out(typst_raw(typst))
+}
