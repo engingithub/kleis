@@ -130,6 +130,8 @@ EXTRA_ENTRIES = [
      "/docs/papers/geometric_unity_epilogue.pdf", 1.0),
     ("docs/papers/pot_picard_lefschetz_kq_paper.pdf",
      "/docs/papers/pot_picard_lefschetz_kq_paper.pdf", 1.0),
+    ("docs/papers/pot_alpha_stability_paper.pdf",
+     "/docs/papers/pot_alpha_stability_paper.pdf", 1.0),
 ]
 
 
