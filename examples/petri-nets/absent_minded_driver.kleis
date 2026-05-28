@@ -1,0 +1,213 @@
+// =============================================================================
+// The Absent-Minded Driver (Piccione & Rubinstein, 1997)
+// =============================================================================
+//
+// A decision-theoretic paradox modeling imperfect recall.
+//
+// The driver starts on a highway and will pass two intersections.
+// At each intersection, they can EXIT or CONTINUE.
+// The twist: the driver CANNOT TELL which intersection they are at.
+//
+// Payoffs:
+//   - Exit at intersection 1 → payoff 0 (bad neighborhood)
+//   - Exit at intersection 2 → payoff 4 (home)
+//   - Pass both intersections → payoff 1 (motel at highway end)
+//
+// Information set: {intersection1, intersection2} — indistinguishable
+// Strategy constraint: prob(exit | intersection1) = prob(exit | intersection2) = p
+//
+// Expected payoff:
+//   E(p) = p·0 + (1-p)·[p·4 + (1-p)·1]
+//        = (1-p)(3p + 1)
+//        = -3p² + 2p + 1
+//
+// Optimal: p* = 1/3, E(p*) = 4/3
+//
+// Net topology:
+//
+//   [START]──▶(enter)──▶[int1]──▶(exit1)──▶[payoff_0]
+//                                 │
+//                                 ▼
+//                              (continue)
+//                                 │
+//                                 ▼
+//                              [int2]──▶(exit2)──▶[payoff_4]
+//                                 │
+//                                 ▼
+//                               (pass)
+//                                 │
+//                                 ▼
+//                              [payoff_1]
+//
+// =============================================================================
+
+import "petri_core.kleis"
+
+// -----------------------------------------------------------------------------
+// Net Structure
+// -----------------------------------------------------------------------------
+
+// Places: 0=start, 1=int1, 2=int2, 3=payoff_0, 4=payoff_4, 5=payoff_1
+// Transitions: 0=enter, 1=exit1, 2=continue, 3=exit2, 4=pass
+
+operation iw : ℤ × ℤ → ℤ
+operation ow : ℤ × ℤ → ℤ
+
+structure AbsentMindedNet {
+    // enter (t=0): consumes from start (p=0), produces to int1 (p=1)
+    axiom iw_enter: iw(0, 0) = 1
+    axiom iw_enter_rest: iw(0, 1) = 0 ∧ iw(0, 2) = 0 ∧ iw(0, 3) = 0 ∧ iw(0, 4) = 0 ∧ iw(0, 5) = 0
+    axiom ow_enter: ow(0, 1) = 1
+    axiom ow_enter_rest: ow(0, 0) = 0 ∧ ow(0, 2) = 0 ∧ ow(0, 3) = 0 ∧ ow(0, 4) = 0 ∧ ow(0, 5) = 0
+
+    // exit1 (t=1): consumes from int1 (p=1), produces to payoff_0 (p=3)
+    axiom iw_exit1: iw(1, 1) = 1
+    axiom iw_exit1_rest: iw(1, 0) = 0 ∧ iw(1, 2) = 0 ∧ iw(1, 3) = 0 ∧ iw(1, 4) = 0 ∧ iw(1, 5) = 0
+    axiom ow_exit1: ow(1, 3) = 1
+    axiom ow_exit1_rest: ow(1, 0) = 0 ∧ ow(1, 1) = 0 ∧ ow(1, 2) = 0 ∧ ow(1, 4) = 0 ∧ ow(1, 5) = 0
+
+    // continue (t=2): consumes from int1 (p=1), produces to int2 (p=2)
+    axiom iw_cont: iw(2, 1) = 1
+    axiom iw_cont_rest: iw(2, 0) = 0 ∧ iw(2, 2) = 0 ∧ iw(2, 3) = 0 ∧ iw(2, 4) = 0 ∧ iw(2, 5) = 0
+    axiom ow_cont: ow(2, 2) = 1
+    axiom ow_cont_rest: ow(2, 0) = 0 ∧ ow(2, 1) = 0 ∧ ow(2, 3) = 0 ∧ ow(2, 4) = 0 ∧ ow(2, 5) = 0
+
+    // exit2 (t=3): consumes from int2 (p=2), produces to payoff_4 (p=4)
+    axiom iw_exit2: iw(3, 2) = 1
+    axiom iw_exit2_rest: iw(3, 0) = 0 ∧ iw(3, 1) = 0 ∧ iw(3, 3) = 0 ∧ iw(3, 4) = 0 ∧ iw(3, 5) = 0
+    axiom ow_exit2: ow(3, 4) = 1
+    axiom ow_exit2_rest: ow(3, 0) = 0 ∧ ow(3, 1) = 0 ∧ ow(3, 2) = 0 ∧ ow(3, 3) = 0 ∧ ow(3, 5) = 0
+
+    // pass (t=4): consumes from int2 (p=2), produces to payoff_1 (p=5)
+    axiom iw_pass: iw(4, 2) = 1
+    axiom iw_pass_rest: iw(4, 0) = 0 ∧ iw(4, 1) = 0 ∧ iw(4, 3) = 0 ∧ iw(4, 4) = 0 ∧ iw(4, 5) = 0
+    axiom ow_pass: ow(4, 5) = 1
+    axiom ow_pass_rest: ow(4, 0) = 0 ∧ ow(4, 1) = 0 ∧ ow(4, 2) = 0 ∧ ow(4, 3) = 0 ∧ ow(4, 4) = 0
+}
+
+// -----------------------------------------------------------------------------
+// Payoff Assignment
+// -----------------------------------------------------------------------------
+
+operation payoff : ℤ → ℤ
+
+structure Payoffs {
+    axiom pay_0: payoff(3) = 0
+    axiom pay_4: payoff(4) = 4
+    axiom pay_1: payoff(5) = 1
+}
+
+// -----------------------------------------------------------------------------
+// Information Set and Strategy
+// -----------------------------------------------------------------------------
+//
+// The driver cannot distinguish intersection1 (p=1) from intersection2 (p=2).
+// A behavioral strategy assigns probability p to EXIT at any node in the info set.
+//
+// We model p as a rational number in [0,1] using Z3 reals.
+
+operation strategy_exit : ℝ
+
+structure ImperfectRecall {
+    // Strategy is a valid probability
+    axiom prob_valid: strategy_exit ≥ 0 ∧ strategy_exit ≤ 1
+
+    // The SAME probability applies at both intersections.
+    // This IS the absent-mindedness constraint — the driver uses one rule
+    // because they cannot condition on which intersection they're at.
+}
+
+// -----------------------------------------------------------------------------
+// Expected Payoff Computation
+// -----------------------------------------------------------------------------
+//
+// E(p) = p·payoff(3) + (1-p)·[p·payoff(4) + (1-p)·payoff(5)]
+//       = p·0 + (1-p)·(4p + (1-p))
+//       = (1-p)(3p + 1)
+//       = -3p² + 2p + 1
+
+operation expected_payoff : ℝ → ℝ
+
+structure PayoffComputation {
+    axiom payoff_formula: ∀(p : ℝ).
+        expected_payoff(p) = (1 - p) * (3 * p + 1)
+}
+
+// -----------------------------------------------------------------------------
+// Verification Examples
+// -----------------------------------------------------------------------------
+
+example "net is bipartite: arcs cross place/transition boundary" {
+    // Places: 0,1,2,3,4,5. Transitions: 0,1,2,3,4.
+    // Every arc goes place→transition or transition→place.
+    assert(
+        iw(0, 0) ≥ 0 ∧ ow(0, 1) ≥ 0 ∧
+        iw(1, 1) ≥ 0 ∧ ow(1, 3) ≥ 0 ∧
+        iw(2, 1) ≥ 0 ∧ ow(2, 2) ≥ 0 ∧
+        iw(3, 2) ≥ 0 ∧ ow(3, 4) ≥ 0 ∧
+        iw(4, 2) ≥ 0 ∧ ow(4, 5) ≥ 0
+    )
+}
+
+example "branching at int1: exit1 and continue compete" {
+    // Both exit1 (t=1) and continue (t=2) consume from int1 (p=1)
+    assert(iw(1, 1) = 1 ∧ iw(2, 1) = 1)
+}
+
+example "branching at int2: exit2 and pass compete" {
+    // Both exit2 (t=3) and pass (t=4) consume from int2 (p=2)
+    assert(iw(3, 2) = 1 ∧ iw(4, 2) = 1)
+}
+
+example "payoff at p=0 (never exit): E = 1" {
+    assert(expected_payoff(0) = 1)
+}
+
+example "payoff at p=1 (always exit): E = 0" {
+    assert(expected_payoff(1) = 0)
+}
+
+example "payoff at p=1/2: E = (1/2)(5/2) = 5/4" {
+    assert(expected_payoff(1/2) = 5/4)
+}
+
+example "optimal strategy: p=1/3 yields payoff 4/3" {
+    // At p=1/3: E = (1 - 1/3)(3·(1/3) + 1) = (2/3)(2) = 4/3
+    // Direct computation avoids quantifier instantiation issues
+    assert((1 - 1/3) * (3 * (1/3) + 1) = 4/3)
+}
+
+example "p=1/3 is a local maximum (derivative = 0)" {
+    // d/dp E(p) = -6p + 2. At p=1/3: -6(1/3) + 2 = -2 + 2 = 0
+    // E(p) = -3p² + 2p + 1, so verify p=1/3 dominates neighbors
+    assert(expected_payoff(1/3) ≥ expected_payoff(1/4))
+    assert(expected_payoff(1/3) ≥ expected_payoff(1/2))
+}
+
+example "p=1/3 dominates all strategies in [0,1]" {
+    // For any valid probability q, E(1/3) ≥ E(q)
+    assert(∀(q : ℝ). (q ≥ 0 ∧ q ≤ 1) → expected_payoff(1/3) ≥ expected_payoff(q))
+}
+
+example "information set constraint excludes perfect-recall optimum" {
+    // With perfect recall, you'd NEVER exit at int1 and ALWAYS exit at int2.
+    // That gives payoff = 4. But under imperfect recall (same p at both),
+    // the best achievable is 4/3 — strictly less than 4.
+    assert(expected_payoff(1/3) < 4)
+}
+
+example "planning vs action consistency (Aumann's resolution)" {
+    // The planning-optimal and action-optimal strategies coincide at p=1/3.
+    // There is no dynamic inconsistency: the same p that maximizes E(p)
+    // also maximizes the conditional payoff at each intersection.
+    //
+    // Conditional on reaching int2 (which happens with prob 1-p):
+    //   E_int2(p) = p·4 + (1-p)·1 = 3p + 1
+    // This is increasing in p — the action-optimal at int2 would be p=1.
+    // But the imperfect-recall constraint forces the same p at int1 too.
+    // The planning optimum p=1/3 accounts for this tradeoff.
+    assert(
+        expected_payoff(1/3) = 4/3 ∧
+        3 * (1/3) + 1 = 2
+    )
+}

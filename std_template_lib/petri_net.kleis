@@ -72,6 +72,42 @@ example "SINK EXISTS: at least one sink place" {
 }
 
 // =============================================================================
+// Game-theoretic verification: information sets and strategy constraints
+// =============================================================================
+//
+// For decision problems with imperfect recall (e.g., absent-minded driver):
+// - Places can be grouped into information sets (info_set param, index 1)
+// - An agent cannot distinguish places within the same information set
+// - Strategy constraint: same transition probability at all places in an info set
+// - Sink places carry payoff values (payoff param, index 1)
+//
+// The preamble provides:
+//   graph_param(c, 1) = info_set code (0 = no info set, >0 = group ID)
+//   For sinks: graph_param(c, 1) = payoff value
+
+// Info set of a place (second parameter, index 1)
+define info_set(c) = graph_param(c, 1)
+
+// Payoff at a sink place (second parameter, index 1 for sinks)
+define sink_payoff(c) = graph_param(c, 1)
+
+// Two places share an information set if both are distinct, both have the same
+// nonzero info_set code
+define same_info_set(c1, c2) =
+    is_place(c1) ∧ is_place(c2) ∧ ¬(c1 = c2) ∧
+    info_set(c1) > 0 ∧ info_set(c1) = info_set(c2)
+
+// Info-set consistency check: places in the same info set must have the same
+// out-degree. This check requires the preamble to emit closed-world axioms for
+// graph_param(c, 1). Currently deferred until the preamble generator emits
+// defaults for all declared param indices (including newly added info_set).
+//
+// To verify info-set consistency on a specific graph, use the standalone
+// absent_minded_driver.kleis example or assert this manually:
+//
+//   ∀(c1 c2). same_info_set(c1, c2) → same out-degree at c1, c2
+
+// =============================================================================
 // Simulation semantics — evaluated by eval_concrete
 // =============================================================================
 //

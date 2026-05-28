@@ -58,6 +58,59 @@ genitive constructions). The axioms capture Afroasiatic structural patterns.
 
 ---
 
+### Absent-Minded Driver — Petri Net Game Theory
+
+**Status:** Graph loads and verifies in graph editor. Simulation always picks same path.
+
+**Completed:**
+- `examples/petri-nets/absent_minded_driver.kleis` — 11 Z3-verified results
+- `examples/petri-nets/graph-editor/absent_minded_driver.kleis` — visual graph file
+- `std_template_lib/petri_net.kleist` — added `info_set:int:0`, `payoff:real:0` params
+- `std_template_lib/petri_net.kleis` — added info-set and payoff define helpers
+
+**TODO:**
+- Fix `pick_next` in `server.rs` — needs random or user-selectable transition firing
+  for branching nets (XOR split). Currently always picks lowest-indexed transition.
+- Fix "Exactly one SinkPlace" verify — decision trees have multiple sinks.
+- Investigate "Requires VoltageSource" cross-domain check leakage.
+- Add screenshot to manual chapter 32 (graph editor) as Petri net game theory example.
+
+---
+
+### Thimble-Comb Isomorphism & Stokes Phenomenon — FUTURE WORK
+
+**Completed:** Volume XII (alpha-stability paper) deployed. Establishes thimble-comb
+isomorphism: the K-Q kernel's Picard-Lefschetz decomposition is an instance of the
+spectral comb (H = dI + A, A skew-symmetric), with unitarity providing antisymmetry.
+
+**Next direction: Stokes phenomenon as comb reorganization.**
+
+When parameters of S(z) vary continuously, thimbles deform. At Stokes lines,
+one thimble connects directly to another saddle point — the intersection numbers
+n_σ jump discontinuously. In the comb language, this is a reorganization of the
+off-diagonal structure (which "teeth" contribute and with what weights).
+
+The K-Q framework already identifies:
+- Stokes jumps → factorization rearrangements (formulation fibers)
+- Resurgent relations → null-space activity (trans-series contributions from ker(Q))
+
+**Open question:** Can the spectral gap theorem (thimble dominance = structurally
+protected) be extended to *prove* that Stokes jumps cannot destroy dominance within
+a topological sector? This would be a stability theorem for the comb under parameter
+deformation — the spectral gap persists across Stokes walls.
+
+**Connection to FEM:** The comb assembly (local saddle-point data → global banded
+matrix) structurally resembles finite element assembly (local element stiffness →
+global banded stiffness matrix). The "elements" are thimbles; unitarity constrains
+assembly to antisymmetry, just as physical symmetry constrains FEM to SPD.
+
+**Files:**
+- `theories/thimble_spectral_comb.kleis` — 33 Z3-verified results
+- `theories/pot_alpha_stability.kleis` — 24 Z3-verified results
+- `docs/papers/pot_alpha_stability_paper.kleis` — Volume XII paper source
+
+---
+
 ### Kernel Factorization Reconciliation — IMPORTANT FUTURE WORK
 
 There are **two different kernel decomposition architectures** in the POT papers that need to be reconciled:

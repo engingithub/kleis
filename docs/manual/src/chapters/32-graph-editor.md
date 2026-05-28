@@ -336,6 +336,12 @@ setup phase and a stepping phase:
 
 *The bond graph domain running a continuous simulation. The oscilloscope shows colored traces for each state variable over time, with AutoSet and Copy Typst controls. Component state values are overlaid on the canvas.*
 
+### Discrete Simulation Example: The Absent-Minded Driver
+
+![Petri net simulation of the absent-minded driver decision problem](../images/graph-editor/graph_editor_petri_absent_minded.png)
+
+*The Petri net domain modeling the absent-minded driver (Piccione & Rubinstein, 1997) — a game-theoretic decision problem with imperfect recall. The branching net has two decision points sharing an information set (the driver cannot tell which intersection they are at), three terminal payoffs, and Z3-verified optimal mixed strategy p = 1/3.*
+
 ## Save and Load
 
 Graphs can be saved to and loaded from `.kleis` files. The save format uses

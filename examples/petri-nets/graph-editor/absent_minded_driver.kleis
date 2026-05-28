@@ -1,0 +1,39 @@
+// Kleis Graph — Absent-Minded Driver (Piccione & Rubinstein, 1997)
+// Domain: petri_net
+//
+// Decision problem with imperfect recall:
+//   START → enter → [int1] → exit1 → payoff_0 (bad neighborhood)
+//                          → continue → [int2] → exit2 → payoff_4 (home)
+//                                              → pass  → payoff_1 (motel)
+//
+// Information set: int1 and int2 share info_set=1 (driver can't tell them apart)
+// Optimal mixed strategy: exit with probability 1/3 at each intersection
+
+define graph_domain = "petri_net"
+
+define graph_components = [
+    ["c0",  "pn_source_place", "SourcePlace", 100, 300, 0, [1, 0]],
+    ["c1",  "pn_transition",   "Transition",  250, 300, 0, []],
+    ["c2",  "pn_place",        "Place",       420, 300, 0, [0, 1]],
+    ["c3",  "pn_transition",   "Transition",  590, 150, 0, []],
+    ["c4",  "pn_transition",   "Transition",  590, 450, 0, []],
+    ["c5",  "pn_place",        "Place",       760, 450, 0, [0, 1]],
+    ["c6",  "pn_transition",   "Transition",  930, 300, 0, []],
+    ["c7",  "pn_transition",   "Transition",  930, 600, 0, []],
+    ["c8",  "pn_sink_place",   "SinkPlace",   760, 150, 0, [0, 0]],
+    ["c9",  "pn_sink_place",   "SinkPlace",   1100, 300, 0, [0, 4]],
+    ["c10", "pn_sink_place",   "SinkPlace",   1100, 600, 0, [0, 1]]
+]
+
+define graph_nets = [
+    ["n0",  [["c0", "right"],  ["c1", "left"]],   []],
+    ["n1",  [["c1", "right"],  ["c2", "left"]],   []],
+    ["n2",  [["c2", "top"],    ["c3", "left"]],   []],
+    ["n3",  [["c2", "bottom"], ["c4", "left"]],   []],
+    ["n4",  [["c3", "right"],  ["c8", "left"]],   []],
+    ["n5",  [["c4", "right"],  ["c5", "left"]],   []],
+    ["n6",  [["c5", "top"],    ["c6", "left"]],   []],
+    ["n7",  [["c5", "bottom"], ["c7", "left"]],   []],
+    ["n8",  [["c6", "right"],  ["c9", "left"]],   []],
+    ["n9",  [["c7", "right"],  ["c10", "left"]],  []]
+]
